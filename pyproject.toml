@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ggl"
+version = "0.1.0"
+description = "Golden Gates Language - core Python engine for digital logic circuit simulation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Phil Peterson", email = "phpeterson@usfca.edu" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+]
+
+[project.optional-dependencies]
+# Tooling for running the test suite as pytest (see tests/).
+test = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
