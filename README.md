@@ -1,84 +1,112 @@
-# GGL (Golden Gates Language) Module
+# GGL (Golden Gates Language)
 
-This directory contains the Python-based circuit simulation engine for Golden Gates.
+The core Python engine for the Golden Gates digital logic circuit simulator.
 
-## Location Rationale
+This package is consumed as a git submodule by other repositories (for example
+[`golden-gates`](https://github.com/usfca-cs-tools/golden-gates), whose Vue app
+runs this engine in the browser via Pyodide) so the simulation logic has a
+single source of truth.
 
-The GGL module is placed in `web/public/ggl/` for the following reasons:
+## Layout
 
-1. **Direct Browser Access**: Vite serves the `public/` directory at the web root, making these files accessible at `/ggl/` in the browser
-2. **Pyodide Integration**: When Pyodide runs in the browser, it can directly import modules from `/ggl/` without any path manipulation
-3. **No Build Processing**: Files in `public/` are served as-is without Vite transformation, which is ideal for Python source files
-
-## Usage with Pyodide
-
-```python
-# After Pyodide is initialized, you can import directly:
-from ggl import Circuit, Input, Output, AndGate
-
-# Or import the entire module:
-import ggl
+```
+ggl/
+├── pyproject.toml      # installable package metadata (src layout)
+├── config.toml         # autograder configuration
+├── src/ggl/            # the engine package
+│   ├── __init__.py     # package exports
+│   ├── circuit.py      # Circuit: manages nodes and connections
+│   ├── node.py         # base Node and Connector
+│   ├── edge.py         # Edge connections
+│   ├── io.py           # Input/Output/Clock nodes
+│   ├── logic.py        # logic gates (AND, OR, NOT, NAND, NOR, XOR, ...)
+│   ├── arithmetic.py   # arithmetic components
+│   ├── plexers.py      # multiplexers / decoders
+│   ├── memory.py       # registers / ROM / RAM
+│   ├── wires.py        # splitters / mergers / tunnels
+│   ├── component.py    # hierarchical components
+│   ├── errors.py       # CircuitError for surfacing errors to front-ends
+│   └── ggl_logging.py  # logging helpers (propagate to browser console)
+└── tests/ggl/          # circuit test programs + ggl.toml
 ```
 
-## Module Structure
+## Install
 
-- `__init__.py` - Package initialization with all exports
-- `circuit.py` - Circuit class for managing nodes and connections
-- `node.py` - Base Node class and Connector
-- `edge.py` - Edge class for connections
-- `io.py` - Input/Output node classes
-- `logic.py` - Logic gate implementations (AND, OR, NOT, NAND, NOR, XOR)
-- `config.toml` - Autograder configuration file
+```sh
+pip install -e .
+```
 
-## Coding Style
+This makes the package importable as `ggl`:
 
-- We use `pycodestyle` (formerly known as `pep8` like this:
-    ```sh
-    pip install pycodestyle
-    autopep8 --in-place *.py
-    ```
-- We haven't set up any custom config in `~/.config/pycodestyle` but that could be done
+```python
+from ggl import circuit, io, logic
 
-## Callbacks
+c = circuit.Circuit()
+g = logic.And(bits=1, label='r')
+a = io.Input(bits=1, label='a'); a.value = 1
+b = io.Input(bits=1, label='b'); b.value = 1
+c.connect(a, g.input("0"))
+c.connect(b, g.input("1"))
+r = io.Output(bits=1, label='r'); c.connect(g, r)
+c.run(); c.stop()
+print(r.value)  # 1
+```
 
-⏺ The __vueUpdateCallback function expects 3 scalar arguments:
+## Coding style
 
-  window.__vueUpdateCallback = (eventType, componentId, value) => {
+We use `pycodestyle` / `autopep8`:
 
-  Arguments:
+```sh
+pip install pycodestyle autopep8
+autopep8 --in-place src/ggl/*.py
+```
 
-  1. eventType (string): The type of event - 'value', 'step', or 'error'
-  2. componentId (string): The Vue component ID (corresponds to the js_id parameter)
-  3. value (any): The payload data - can be scalar or object depending on event type
+## Callbacks (browser integration)
 
-  From Python, you would call it like:
+When running under Pyodide, the engine calls `window.__vueUpdateCallback` with
+three scalar arguments:
 
-  ### For value updates
-  updateCallback('value', component_js_id, new_value)
+```js
+window.__vueUpdateCallback = (eventType, componentId, value) => { ... }
+```
 
-  ### For step highlighting
-  updateCallback('step', component_js_id, {'active': True, 'style': 'processing'})
+- `eventType` — `'value'`, `'step'`, or `'error'`
+- `componentId` — the front-end component id (the `js_id` parameter)
+- `value` — scalar or object payload depending on the event type
 
+```python
+# value updates
+updateCallback('value', component_js_id, new_value)
+# step highlighting
+updateCallback('step', component_js_id, {'active': True, 'style': 'processing'})
+```
 
 ## Logging
 
-The default log level is `logging.WARN`. Our `logger` objects propagate to the browser console when running under Pyodide.
-
-To change the log level in a GGL source file:
+The default log level is `logging.WARN`. Logger objects propagate to the browser
+console under Pyodide. To change the level in a source file:
 
 ```python
 import logging
 logger = new_logger(__name__, logging.INFO)
 ```
 
-If you're working in GGL without Pyodide you can use an environment variable to avoid changing code:
+Outside Pyodide you can set the level via an environment variable instead of
+editing code:
 
 ```sh
-export ggloglevel='logging.INFO'; grade test
+export ggloglevel='logging.INFO'
 ```
 
 ## Errors
 
-1. Use the Exception class in `errors.py` to bubble errors up to the front-end. 
-1. Errors do not use the Vue callback mechanism. 
-1. Error strings are stored in the locale file(s) in the front-end, and referred to using string IDs which are shared between the front-end and GGL
+1. Use the `Exception` class in `errors.py` to bubble errors up to the front-end.
+2. Errors do not use the Vue callback mechanism.
+3. Error strings are stored in the front-end locale file(s) and referred to by
+   string IDs shared between the front-end and GGL.
+
+## Tests
+
+`tests/ggl/` contains circuit programs driven by an autograder config
+(`tests/ggl/ggl.toml`). Conversion of this suite to `pytest` is tracked
+separately.
