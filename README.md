@@ -107,6 +107,21 @@ export ggloglevel='logging.INFO'
 
 ## Tests
 
-`tests/ggl/` contains circuit programs driven by an autograder config
-(`tests/ggl/ggl.toml`). Conversion of this suite to `pytest` is tracked
-separately.
+`tests/ggl/` contains circuit programs whose expected outputs are recorded in
+`tests/ggl/ggl.toml` (the same file the
+[autograder](https://github.com/phpeterson-usf/autograder) uses, so that
+remains the single source of truth for expected values).
+
+Run the suite with pytest:
+
+```sh
+pip install -e ".[test]"
+pytest
+```
+
+`tests/test_circuits.py` parametrizes over the `ggl.toml` entries, runs each
+program, and compares output using the same normalization as the autograder
+(case-insensitive, per-line strip). Four programs inherited from golden-gates
+already fail against the engine (the autograder scores 54/58 on this corpus);
+they are marked `xfail` so the suite stays green while the known failures stay
+visible.
