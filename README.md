@@ -1,5 +1,7 @@
 # GGL (Golden Gates Language)
 
+[![Tests](https://github.com/usfca-cs-tools/ggl/actions/workflows/test.yml/badge.svg)](https://github.com/usfca-cs-tools/ggl/actions/workflows/test.yml)
+
 The core Python engine for the Golden Gates digital logic circuit simulator.
 
 This package is consumed as a git submodule by other repositories (for example
