@@ -87,6 +87,24 @@ class Circuit:
             edge_module.gate_on_change = prev_gating
             self._in_step = False
 
+    def settle(self):
+        """
+        Propagate combinational logic until the outputs stop changing.
+
+        Unlike a single step(), this re-propagates as many passes as needed for
+        reconvergent paths of unequal depth to settle. It is side-effect free —
+        it does not change `running` or advance the clock — so it is safe to
+        call any time to read settled outputs. Bounded by MAX_ITERATIONS; warns
+        if the circuit fails to stabilize (e.g. a combinational loop).
+        """
+        for _ in range(MAX_ITERATIONS):
+            prev = {id(n): n.value for n in self.outputs}
+            self.step(rising_edge=False)
+            curr = {id(n): n.value for n in self.outputs}
+            if prev == curr:
+                return
+        logger.warning("Combinational logic did not stabilize")
+
     def run(self):
         """
         Settle the circuit's combinational logic synchronously and return.
@@ -96,15 +114,7 @@ class Circuit:
         run_async().
         """
         self.running = True
-        # Settle combinational logic until the outputs stop changing.
-        for _ in range(MAX_ITERATIONS):
-            prev = {id(n): n.value for n in self.outputs}
-            self.step(rising_edge=False)
-            curr = {id(n): n.value for n in self.outputs}
-            if prev == curr:
-                break
-        else:
-            logger.warning("Combinational logic did not stabilize")
+        self.settle()
         # One clocked pass so sequential elements (registers) latch the value
         # of their now-settled inputs. The settle loop above only watches the
         # outputs, so an internal register whose D arrived late in a pass needs
