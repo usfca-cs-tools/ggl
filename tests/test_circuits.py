@@ -61,10 +61,9 @@ CASES = _load_cases()
 # raises in node.py; the other three produce values that differ from the
 # recorded expectations.
 KNOWN_FAILURES = {
-    "priority-4in": "pre-existing failure (autograder 54/58): raises in node.py",
-    "d-latch-clr": "pre-existing failure (autograder 54/58): output mismatch",
-    "analyze_decode": "pre-existing failure (autograder 54/58): output mismatch",
-    "project05": "pre-existing failure (autograder 54/58): output mismatch",
+    "d-latch-clr": "pre-existing failure: output mismatch",
+    "analyze_decode": "pre-existing failure: output mismatch",
+    "project05": "pre-existing failure: output mismatch",
 }
 
 
