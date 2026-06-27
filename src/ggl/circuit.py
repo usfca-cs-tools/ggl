@@ -29,7 +29,7 @@ class Circuit:
         # which non-deterministically changes how feedback (latches) settle.
         self.all_nodes = []
         self.clock: Clock = None
-        self.running = True
+        self.running = False  # set True by run()/run_async()
         self.input_q = None  # Queue for runtime input updates
         # When True, assigning to an Input's .value re-propagates the circuit.
         self.auto_propagate = True
