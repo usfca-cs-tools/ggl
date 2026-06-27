@@ -170,4 +170,4 @@ get_bitseq = [0x40B602B3, 0x128293, 0x4000393, 0x729863, 0x50313, 0xFFF00393, 0x
 for iw in get_bitseq:
     input0.value = iw
     print(output0.value)
-    circuit0.step()
+    circuit0.settle()
