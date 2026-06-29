@@ -456,3 +456,15 @@ expected = """
 11
 """
 rubric = 1
+
+[[tests]]
+name = "registerclr"
+input = ["python3", "$project_tests/registerclr.py"]
+expected = """
+0x0
+0x0
+0xab
+0xab
+0x0
+"""
+rubric = 1

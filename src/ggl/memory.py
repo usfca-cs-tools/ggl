@@ -1,3 +1,5 @@
+import random
+
 from .node import BitsNode
 from .ggl_logging import new_logger
 
@@ -19,13 +21,61 @@ class Register(BitsNode):
             bits=bits,
             named_inputs=[Register.D, Register.CLK, Register.en],
             named_outputs=[Register.Q])
-        self.value = 0
+        self.value = random.getrandbits(bits)  # initial state is random
 
     def propagate(self, output_name='Q', value=0):
         en = self.safe_read_input(Register.en, bits=1)
         clk = self.safe_read_input(Register.CLK, bits=1)
         if en and clk:
             self.value = self.safe_read_input(Register.D)
+        return super().propagate(output_name=output_name, value=self.value)
+
+    # Nothing special to do for clone(). BitsNode.clone() is enough.
+
+
+class RegisterClr(BitsNode):
+    """Edge-triggered register with an asynchronous clear.
+
+    Ports: D, CLK, en, CLR -> Q.
+
+    - CLR is asynchronous and dominant: while CLR is high, Q is forced to 0
+      immediately, independent of the clock or enable. This is how a running
+      circuit is driven to a known initial state without pulsing the clock.
+    - Otherwise, on a rising clock edge (CLK 0 -> 1) with en high, Q latches D.
+    - Power-up contents are undefined (a register holds nothing meaningful until
+      cleared or loaded), so the value starts from a random bit pattern — assert
+      CLR to establish a known 0. CLK, en, and CLR are ordinary inputs; only
+      this propagate() logic gives them their meaning.
+    """
+    D = 'D'
+    CLK = 'CLK'
+    en = 'en'
+    CLR = 'CLR'
+    Q = 'Q'
+    kind = 'RegisterClr'
+
+    def __init__(self, js_id='', label='', bits=32):
+        super().__init__(
+            kind=RegisterClr.kind,
+            js_id=js_id,
+            label=label,
+            bits=bits,
+            named_inputs=[RegisterClr.D, RegisterClr.CLK,
+                          RegisterClr.en, RegisterClr.CLR],
+            named_outputs=[RegisterClr.Q])
+        self.value = random.getrandbits(bits)  # initial state is random
+        self._prev_clk = 0  # last CLK level seen, for rising-edge detection
+
+    def propagate(self, output_name='Q', value=0):
+        clr = self.safe_read_input(RegisterClr.CLR, bits=1)
+        clk = self.safe_read_input(RegisterClr.CLK, bits=1)
+        en = self.safe_read_input(RegisterClr.en, bits=1)
+        rising = self._prev_clk == 0 and clk == 1
+        self._prev_clk = clk
+        if clr:
+            self.value = 0                       # asynchronous, dominant
+        elif rising and en:
+            self.value = self.safe_read_input(RegisterClr.D)
         return super().propagate(output_name=output_name, value=self.value)
 
     # Nothing special to do for clone(). BitsNode.clone() is enough.
