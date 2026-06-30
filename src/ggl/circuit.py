@@ -30,7 +30,6 @@ class Circuit:
         self.all_nodes = []
         self.clock: Clock = None
         self.running = False  # set True by run()/run_async()
-        self.input_q = None  # Queue for runtime input updates
         # When True, assigning to an Input's .value re-propagates the circuit.
         self.auto_propagate = True
         # Re-entrancy guard so propagation can't trigger nested step()s.
@@ -40,28 +39,28 @@ class Circuit:
         if js_logging is not None:
             set_global_js_logging(js_logging)
 
-    def step(self, rising_edge=False):
+    def step(self):
         """
         Perform one synchronous propagation pass: seed the work queue with the
-        circuit's inputs (and, on a rising edge, the clock) and propagate until
-        the circuit settles. Each node propagates at most once per pass.
+        circuit's inputs (the clock is an ordinary input) and propagate, each
+        node firing at most once. Returns True if any node's value changed, so
+        settle() can tell whether a fixpoint has been reached.
         """
         self._in_step = True
         # The synchronous engine bounds cycles with the visited set below, so
         # edges must always forward their value during a step.
         prev_gating = edge_module.gate_on_change
         edge_module.gate_on_change = False
+        changed = False
         try:
             work = deque(self.inputs)
-            if rising_edge and self.clock is not None:
-                work.append(self.clock)
-
             visited = set()
             while work:
                 node = work.popleft()
                 if node in visited:
                     continue
                 visited.add(node)
+                before = getattr(node, 'value', None)
                 try:
                     new_work = node.propagate()
                 except CircuitError as e:
@@ -79,6 +78,8 @@ class Circuit:
                             **e.additional_fields
                         ) from e
                     raise
+                if getattr(node, 'value', None) != before:
+                    changed = True
                 if new_work:
                     for n in new_work:
                         if n not in visited:
@@ -86,106 +87,81 @@ class Circuit:
         finally:
             edge_module.gate_on_change = prev_gating
             self._in_step = False
+        return changed
 
     def settle(self):
         """
-        Propagate combinational logic until the outputs stop changing.
+        Propagate until a full pass changes no node's value — the circuit's
+        fixpoint for the current (static) inputs.
 
-        Unlike a single step(), this re-propagates as many passes as needed for
-        reconvergent paths of unequal depth to settle. It is side-effect free —
-        it does not change `running` or advance the clock — so it is safe to
-        call any time to read settled outputs. Bounded by MAX_ITERATIONS; warns
-        if the circuit fails to stabilize (e.g. a combinational loop).
+        step() reports whether anything changed; we repeat until it doesn't.
+        Watching every node, not just the outputs, avoids stopping while an
+        internal value is still in flight toward the outputs. Side-effect free
+        (does not change `running` or advance the clock), so it is safe to call
+        any time. The cap scales with circuit size so a deep-but-stable circuit
+        isn't falsely flagged; reaching it means the circuit never settles
+        (e.g. a combinational loop), which is warned.
         """
-        for _ in range(MAX_ITERATIONS):
-            prev = {id(n): n.value for n in self.outputs}
-            self.step(rising_edge=False)
-            curr = {id(n): n.value for n in self.outputs}
-            if prev == curr:
+        cap = max(MAX_ITERATIONS, len(self.all_nodes) + 1)
+        for _ in range(cap):
+            if not self.step():
                 return
-        logger.warning("Combinational logic did not stabilize")
+        logger.warning("Circuit did not stabilize")
 
     def run(self):
         """
         Settle the circuit's combinational logic synchronously and return.
 
-        This is the entry point used by the headless test suite. The
-        long-running, free-running-clock variant for the browser lives in
-        run_async().
+        This is the headless entry point. The free-running, real-time variant
+        for the browser lives in run_async().
         """
         self.running = True
         self.settle()
-        # One clocked pass so sequential elements (registers) latch the value
-        # of their now-settled inputs. The settle loop above only watches the
-        # outputs, so an internal register whose D arrived late in a pass needs
-        # this extra pass to re-read it.
-        self.step(rising_edge=True)
 
-    async def run_clock(self, clock_q):
+    def cycle(self):
         """
-        Asynchronous function to notify a running circuit of clock edges
+        Advance the circuit by one clock cycle.
 
-        :param self: Description
-        :param clock_q: Queue to notify on rising or falling edge
+        Settles the combinational logic, then drives the clock low -> high ->
+        low, settling each phase, so edge-triggered elements latch on the
+        rising edge. Requires a connected Clock.
         """
-        duty_cycle = 1 / self.clock.frequency / 2
-        while self.running:
-            await asyncio.sleep(duty_cycle)
-            await clock_q.put('unused')
-
-    async def run_circuit(self, clock_q):
-        work = [self.clock] if self.clock else []
-        for i in self.inputs:
-            work.append(i)
-        while self.running:
-            # Check for clock edges
-            try:
-                _ = clock_q.get_nowait()
-                self.clock.toggle()
-                work.append(self.clock)
-            except asyncio.QueueEmpty:
-                pass
-            # Check for input updates from UI
-            try:
-                input_node = self.input_q.get_nowait()
-                if input_node not in work:
-                    work.append(input_node)
-            except asyncio.QueueEmpty:
-                pass
-            if len(work) == 0:
-                await asyncio.sleep(0.1)
-                continue
-            node = work[0]
-            new_work = node.propagate()
-            work.remove(node)
-            if new_work:
-                work += new_work
+        if self.clock is None:
+            raise ValueError("cycle() requires a connected Clock")
+        self.clock.value = 0
+        self.settle()
+        self.clock.value = 1
+        self.settle()
+        self.clock.value = 0
+        self.settle()
 
     async def run_async(self):
         """
-        Long-running asynchronous simulation for the browser/Pyodide:
+        Long-running asynchronous simulation for the browser/Pyodide: a
         free-running clock plus live input updates via update_input(), until
         stop() is called. Driven with `await circuit0.run_async()`.
+
+        This is just real-time pacing over the same engine as the headless
+        path: toggle the clock on its duty cycle and settle(); live input
+        changes settle immediately in update_input().
         """
         self.running = True
-        clock_q = asyncio.Queue()
-        self.input_q = asyncio.Queue()
-
-        if self.clock:
-            await asyncio.gather(
-                self.run_circuit(clock_q),
-                self.run_clock(clock_q)
-            )
-        else:
-            await self.run_circuit(clock_q)
+        self.settle()
+        while self.running:
+            if self.clock is not None and self.clock.frequency:
+                await asyncio.sleep(1 / self.clock.frequency / 2)
+                self.clock.value = 1 - self.clock.value
+                self.settle()
+            else:
+                await asyncio.sleep(0.1)
 
     def update_input(self, js_id, value):
-        """Update an input node's value at runtime and trigger re-propagation"""
+        """Update an input node's value at runtime and re-settle the circuit."""
         for node in self.all_nodes:
             if node.js_id == js_id:
                 node.value = value
-                if self.input_q:
-                    self.input_q.put_nowait(node)
+                if self.running:
+                    self.settle()
                 logger.info(f"Updated input {js_id} to {value}")
                 return
         logger.warning(f"Input node {js_id} not found")
@@ -246,8 +222,9 @@ class Circuit:
         if isinstance(srcnode, CircuitNode):
             srcnode._wire_child_output(srcname, edge)
 
-        # Keep a list of Input Nodes so we can start the simulation from there
-        if srcnode.kind == Input.kind and srcnode not in self.inputs:
+        # Seed the simulation from Input Nodes — and from the Clock, which is
+        # an ordinary signal as far as propagation is concerned.
+        if srcnode.kind in (Input.kind, Clock.kind) and srcnode not in self.inputs:
             self.inputs.append(srcnode)
             srcnode.circuit = self
         if destnode.kind == Output.kind and destnode not in self.outputs:

@@ -202,25 +202,9 @@ class Clock(IONode):
         )
         self.frequency = frequency
         self.mode = mode
-        self.prev_value = 0
 
     def propagate(self, output_name='0', value=0):
         return super().propagate(value=self.value)
-
-    def toggle(self):
-        self.prev_value = self.value
-        self.value = 1 - self.value
-
-    def tick(self):
-        """Manually advance a manual-mode clock by one half-period.
-
-        Returns True only on a rising edge (0 -> 1), so test harnesses can do
-        `if clk.tick(): circuit.step(rising_edge=True)`.
-        """
-        if self.mode != 'manual':
-            logger.warning("tick() is only for clocks in manual mode")
-        self.toggle()
-        return self.prev_value == 0 and self.value == 1
 
 
 # class Test(Node):
