@@ -5,7 +5,8 @@ from ggl import arithmetic, circuit, component, io, logic, memory, plexers, wire
 # Build the circuit
 circuit0 = circuit.Circuit()
 clk = io.Input(label="CLK", bits=1)
-reg = memory.Register(label="REG", bits=8)
+clr = io.Input(label="CLR", bits=1)
+reg = memory.RegisterClr(label="REG", bits=8)
 adder = arithmetic.Adder(label="+", bits=8)
 out = io.Output(label="count", bits=8)
 const_en = io.Constant(bits=1); const_en.value = 1
@@ -14,6 +15,7 @@ const_cin = io.Constant(bits=1); const_cin.value = 0
 
 # Connect components
 circuit0.connect(clk, reg.input("CLK"))
+circuit0.connect(clr, reg.input("CLR"))
 circuit0.connect(const_en, reg.input("en"))
 circuit0.connect(const_inc, adder.input("b"))
 circuit0.connect(const_cin, adder.input("cin"))
@@ -122,7 +124,8 @@ circuit0 = circuit.Circuit(js_logging=True)
 
 input0 = io.Input(label="PN", bits=2, js_id="input_1_1754163895356")
 input0.value = 3
-input1 = io.Clock(label="CLK",mode="manual", frequency=1, js_id="input_2_1754199853071")
+input1 = io.Input(label="CLK", bits=1, js_id="input_2_1754199853071")
+clr = io.Input(label="CLR", bits=1)
 instruction_memory_1 = instruction_memory()
 and0 = logic.And(inverted_inputs=[1], js_id="and-gate_1_1754195063561")
 comp0 = arithmetic.Comparator(label="=", bits=32, js_id="compare_1_1754166982615")
@@ -130,14 +133,14 @@ analyze_decode_1 = analyze_decode()
 output0 = io.Output(label="iw", bits=32, js_id="output_11_1754197476382")
 inum = io.Output(label="inum", bits=3)
 counter_8bit_1 = counter_8bit()
-reg0 = memory.Register(label="REG", bits=8, js_id="register_8_1754164301625")
-reg1 = memory.Register(label="REG", bits=8, js_id="register_1_1754164265627")
-reg2 = memory.Register(label="REG", bits=8, js_id="register_2_1754164285939")
-reg3 = memory.Register(label="REG", bits=8, js_id="register_3_1754164288706")
-reg4 = memory.Register(label="REG", bits=8, js_id="register_4_1754164290422")
-reg5 = memory.Register(label="REG", bits=8, js_id="register_5_1754164292136")
-reg6 = memory.Register(label="REG", bits=8, js_id="register_6_1754164293790")
-reg7 = memory.Register(label="REG", bits=8, js_id="register_7_1754164299897")
+reg0 = memory.RegisterClr(label="REG", bits=8, js_id="register_8_1754164301625")
+reg1 = memory.RegisterClr(label="REG", bits=8, js_id="register_1_1754164265627")
+reg2 = memory.RegisterClr(label="REG", bits=8, js_id="register_2_1754164285939")
+reg3 = memory.RegisterClr(label="REG", bits=8, js_id="register_3_1754164288706")
+reg4 = memory.RegisterClr(label="REG", bits=8, js_id="register_4_1754164290422")
+reg5 = memory.RegisterClr(label="REG", bits=8, js_id="register_5_1754164292136")
+reg6 = memory.RegisterClr(label="REG", bits=8, js_id="register_6_1754164293790")
+reg7 = memory.RegisterClr(label="REG", bits=8, js_id="register_7_1754164299897")
 output1 = io.Output(label="DONE", bits=1, js_id="output_10_1754167094638")
 mux0 = plexers.Multiplexer(selector_bits=3, bits=8, js_id="multiplexer_1_1754164043134")
 decoder0 = plexers.Decoder(label="DEC", selector_bits=3, js_id="decoder_1_1754164072211")
@@ -218,16 +221,32 @@ circuit0.connect(and0, reg2.input("CLK"), js_id="wire_1754198502505")    # and0 
 circuit0.connect(and0, reg0.input("CLK"), js_id="wire_1754198485632")    # and0 -> reg0.in[1]
 circuit0.connect(and0, reg1.input("CLK"), js_id="wire_1754198494659")    # and0 -> reg1.in[1]
 
+# Asynchronous clear gives the PC and the eight type-counters a known 0 start.
+circuit0.connect(clr, counter_8bit_1.input("CLR"))
+circuit0.connect(clr, reg0.input("CLR"))
+circuit0.connect(clr, reg1.input("CLR"))
+circuit0.connect(clr, reg2.input("CLR"))
+circuit0.connect(clr, reg3.input("CLR"))
+circuit0.connect(clr, reg4.input("CLR"))
+circuit0.connect(clr, reg5.input("CLR"))
+circuit0.connect(clr, reg6.input("CLR"))
+circuit0.connect(clr, reg7.input("CLR"))
 
-while True:
-    iw = output0.value
+# Reset all registers to 0.
+input1.value = 0
+clr.value = 1
+circuit0.settle()
+clr.value = 0
+circuit0.settle()
 
-    if iw == 0xc0001073:
-        break
-
-    if input1.tick():
-        circuit0.step(rising_edge=True)
-        iw = output0.value
+# Run until the program-end instruction (ecall) appears at the PC. Each cycle:
+# settle the combinational decode, then pulse the clock (0 -> 1 -> 0) so the
+# enabled type-counter and the PC latch on the rising edge.
+while output0.value != 0xc0001073:
+    input1.value = 1
+    circuit0.settle()
+    input1.value = 0
+    circuit0.settle()
 
 print("Program", input0.value)
 print("Total:", output2.value)

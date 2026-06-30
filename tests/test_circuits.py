@@ -62,7 +62,6 @@ CASES = _load_cases()
 # recorded expectations.
 KNOWN_FAILURES = {
     "d-latch-clr": "pre-existing failure: output mismatch",
-    "project05": "pre-existing failure: output mismatch",
 }
 
 
