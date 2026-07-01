@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit, io, memory, wires
 
 circuit0 = circuit.Circuit(js_logging=True)
@@ -61,4 +58,4 @@ circuit0.connect(merger0, output0)    # merger0 -> output0
 circuit0.run()          # settle with CLK low so D propagates through the splitter
 input1.value = 1        # rising edge: registers latch their D bits
 circuit0.settle()
-print(output0.value)
+assert output0.value == 1

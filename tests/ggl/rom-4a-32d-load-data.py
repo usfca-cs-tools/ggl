@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit, component, io, logic, memory, plexers, wires
 
 circuit0 = circuit.Circuit(js_logging=True)
@@ -23,6 +20,4 @@ circuit0.connect(input1, rom0.input("sel"))    # input1 -> rom0.in[1]
 circuit0.connect(rom0.output("D"), output0)    # rom0 -> output0
 circuit0.run()
 
-print(hex(output0.value))  # expected: 0x2b282b3
-
-circuit0.stop()
+assert output0.value == 0x2b282b3

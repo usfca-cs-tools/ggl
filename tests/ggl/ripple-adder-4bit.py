@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit
 from ggl import io
 from ggl import logic
@@ -107,10 +104,8 @@ ripple.connect(fa3.output("cout"), cout)
 # Run: 5 + 3 = 8 (1000 in binary)
 ripple.run()
 
-print(s0.value)
-print(s1.value)
-print(s2.value)
-print(s3.value)
-print(cout.value)
-
-ripple.stop()
+assert s0.value == 0
+assert s1.value == 0
+assert s2.value == 0
+assert s3.value == 1
+assert cout.value == 0

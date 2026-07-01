@@ -1,5 +1,3 @@
-import sys
-sys.path.append('../')
 from ggl import arithmetic, circuit, io
 
 # Test attribute-style syntax with arithmetic components
@@ -32,7 +30,5 @@ a.value = 15
 b.value = 10
 circuit0.run()
 
-print(f"{sum_out.value}")
-print(f"{eq_out.value}")
-
-circuit0.stop()
+assert sum_out.value == 25
+assert eq_out.value == 0

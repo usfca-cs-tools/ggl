@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit, io, logic, wires
 
 
@@ -133,6 +130,4 @@ circuit2.connect(input0, splitter0)    # input0 -> splitter0
 circuit2.connect(input1, splitter1)    # input1 -> splitter1
 circuit2.run()
 
-print(hex(output1.value))  # expected: 0x46
-
-circuit2.stop()
+assert output1.value == 0x46

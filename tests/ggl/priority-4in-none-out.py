@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import io, circuit, plexers
 
 circuit0 = circuit.Circuit()
@@ -30,10 +27,9 @@ circuit0.connect(decoder0.output("any"), any)
 
 circuit0.run()
 
-print(inum.value)
-print(any.value)
+assert inum.value == 0
+assert any.value == 0
 
-circuit0.stop()
 
 """
 Test the case where no inputs are high, so inum and any are both 0

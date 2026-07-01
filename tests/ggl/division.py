@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit
 from ggl import io
 from ggl import arithmetic
@@ -26,6 +23,5 @@ c.connect(div.output('r'), remainder)
 
 
 c.run()
-print(quotient.value)
-print(remainder.value)
-c.stop()
+assert quotient.value == 1
+assert remainder.value == 4

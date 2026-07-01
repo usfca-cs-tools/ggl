@@ -21,7 +21,6 @@ classifiers = [
 # Tooling for running the test suite as pytest (see tests/).
 test = [
     "pytest>=7.0",
-    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [tool.setuptools.packages.find]
@@ -30,4 +29,5 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+pythonpath = ["src"]
 

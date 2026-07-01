@@ -1,5 +1,3 @@
-import sys
-sys.path.append('../')
 from ggl import circuit, logic, io
 
 # A gated D-latch with asynchronous clear, built from gates exactly as the
@@ -64,7 +62,7 @@ d_latch_clr.connect(and1, srlatch_1.input("r"))        # and1 -> r
 
 # Settle the initial state: CLR=1 holds Q at 0.
 d_latch_clr.run()
-print(f"CLR=1 (init):        Q={Q.value}, ~Q={notQ.value}")
+assert (Q.value, notQ.value) == (0, 1)
 
 # Release the clear; the latch keeps its known 0.
 clr.value = 0
@@ -74,23 +72,21 @@ d_latch_clr.settle()
 d.value = 1
 clk.value = 1
 d_latch_clr.settle()
-print(f"CLK=1, D=1 (load 1): Q={Q.value}, ~Q={notQ.value}")
+assert (Q.value, notQ.value) == (1, 0)
 
 # CLK low: the latch holds the stored 1 even as D falls.
 clk.value = 0
 d.value = 0
 d_latch_clr.settle()
-print(f"CLK=0, D=0 (hold):   Q={Q.value}, ~Q={notQ.value}")
+assert (Q.value, notQ.value) == (1, 0)
 
 # CLK high again stores the new D=0.
 clk.value = 1
 d_latch_clr.settle()
-print(f"CLK=1, D=0 (load 0): Q={Q.value}, ~Q={notQ.value}")
+assert (Q.value, notQ.value) == (0, 1)
 
 # CLK low: the latch holds the stored 0 even as D rises.
 clk.value = 0
 d.value = 1
 d_latch_clr.settle()
-print(f"CLK=0, D=1 (hold):   Q={Q.value}, ~Q={notQ.value}")
-
-d_latch_clr.stop()
+assert (Q.value, notQ.value) == (0, 1)

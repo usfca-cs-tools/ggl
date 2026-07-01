@@ -1,5 +1,3 @@
-import sys
-sys.path.append('../')
 from ggl import arithmetic, circuit, component, io, logic, memory, plexers, wires
 
 # Build the circuit
@@ -248,13 +246,13 @@ while output0.value != 0xc0001073:
     input1.value = 0
     circuit0.settle()
 
-print("Program", input0.value)
-print("Total:", output2.value)
-print("Itype:", output4.value)
-print("Rtype:", output5.value)
-print("Load:", output6.value)
-print("Stype:", output7.value)
-print("Btype:", output8.value)
-print("JALR:", output9.value)
-print("J:", output3.value)
-print("JAL:", output10.value)
+assert input0.value == 3
+assert output2.value == 6
+assert output4.value == 0
+assert output5.value == 5
+assert output6.value == 0
+assert output7.value == 0
+assert output8.value == 0
+assert output9.value == 1
+assert output3.value == 0
+assert output10.value == 0

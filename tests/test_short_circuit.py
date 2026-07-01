@@ -1,11 +1,4 @@
-"""Connecting two wires to the same input port is a short circuit and must
-raise, rather than silently keeping the last wire (which used to hide real
-wiring mistakes — see the d-flip-flop stray wires)."""
-
-import os
-import sys
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+"""Two wires into one input port is a short circuit and must raise."""
 
 import pytest
 

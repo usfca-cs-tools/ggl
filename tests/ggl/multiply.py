@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit
 from ggl import io
 from ggl import arithmetic
@@ -24,5 +21,4 @@ c.connect(multiply.output('mul'), product)
 
 
 c.run()
-print(product.value)
-c.stop()
+assert product.value == 54

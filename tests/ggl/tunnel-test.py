@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit
 from ggl import io
 from ggl import wires
@@ -21,8 +18,7 @@ circuit0.connect(tunnel2, r)
 circuit0.connect(tunnel2, s)
 
 circuit0.run()
-circuit0.stop()
 
 
-print(r.value)
-print(s.value)
+assert r.value == 11
+assert s.value == 11

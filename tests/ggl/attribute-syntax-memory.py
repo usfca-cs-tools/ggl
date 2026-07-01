@@ -1,5 +1,3 @@
-import sys
-sys.path.append('../')
 from ggl import circuit, io, memory
 
 # Test attribute-style syntax with memory components
@@ -24,5 +22,4 @@ enable.value = 1
 clk.value = 1
 circuit0.run()
 
-print(hex(data_out.value))
-circuit0.stop()
+assert data_out.value == 0xab

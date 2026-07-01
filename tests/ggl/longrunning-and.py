@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit
 from ggl import io
 from ggl import logic
@@ -20,9 +17,7 @@ r = io.Output(bits=1, label='r')
 c.connect(g, r)
 
 c.run()
-print(r.value)
+assert r.value == 1
 a.value = 0b0
 b.value = 0b0
-print(r.value)
-
-c.stop()
+assert r.value == 0

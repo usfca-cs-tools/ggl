@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import io, logic, circuit
 
 circuit0 = circuit.Circuit()
@@ -23,5 +20,4 @@ r = io.Output(bits=4, label="R")
 circuit0.connect(xnor1, r)
 
 circuit0.run()                          # output should be 3 / 0b11
-circuit0.stop()
-print(r.value) 
+assert r.value == 3

@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit, io, memory
 
 c = circuit.Circuit()
@@ -26,4 +23,4 @@ clk.value = 1
 c.settle()
 
 # Check output
-print(q.value)
+assert q.value == 1

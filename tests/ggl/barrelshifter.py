@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit
 from ggl import io
 from ggl import arithmetic
@@ -25,7 +22,7 @@ c.connect(sll.output('out'), out)
 
 
 c.run()
-print(bin(out.value))
+assert out.value == 0b100
 
 srl = arithmetic.BarrelShifter(bits=4, direction='right', mode='logical', label='rightshiftlogical')
 outSRL = io.Output(bits=4, label="out_right")
@@ -36,7 +33,7 @@ c.connect(b, srl.input('shift'))
 c.connect(srl.output('out'), outSRL)
 
 c.run()
-print(bin(outSRL.value))
+assert outSRL.value == 0b101
 
 sra = arithmetic.BarrelShifter(bits=4, direction='right', mode='arithmetic', label='rightshiftarithmetic')
 outSRA = io.Output(bits=4, label="out_right")
@@ -47,5 +44,4 @@ c.connect(b, sra.input('shift'))
 c.connect(sra.output('out'), outSRA)
 
 c.run()
-print(bin(outSRA.value))
-c.stop()
+assert outSRA.value == 0b1101

@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit
 from ggl import io
 from ggl import wires
@@ -26,5 +23,4 @@ for i in range(len(split.splits)):
 circuit0.connect(merge, r.inputs[0])
 circuit0.run()
 
-print(r.value)
-circuit0.stop()
+assert r.value == 305419896

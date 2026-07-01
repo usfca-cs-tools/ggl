@@ -1,5 +1,3 @@
-import sys
-sys.path.append('../')
 from ggl import arithmetic, circuit, io, memory
 
 # Build the circuit
@@ -30,8 +28,8 @@ circuit0.settle()
 clr.value = 0
 
 # Count 12 cycles: read the current count, then pulse the clock (0 -> 1 -> 0).
-for _ in range(12):
-    print(out.value)
+for i in range(12):
+    assert out.value == i
     clk.value = 1
     circuit0.settle()
     clk.value = 0

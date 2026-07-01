@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit, io, logic, wires
 from ggl.errors import CircuitError
 
@@ -131,7 +128,6 @@ circuit0.connect(input1, splitter1, js_id="wire_1753904413831")    # input1 -> s
 
 try:
     circuit0.run()
+    assert False, "expected a bitWidthMismatch CircuitError"
 except CircuitError as err:
-    print(err)
-
-#circuit0.stop()
+    assert err.error_code == "bitWidthMismatch"

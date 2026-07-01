@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit, io, memory
 
 c = circuit.Circuit()
@@ -30,6 +27,4 @@ d = io.Output(bits=2)
 c.connect(ram.D, d)
 c.run()
 
-print(bin(d.value))  # expect 0b11
-
-c.stop()
+assert d.value == 0b11

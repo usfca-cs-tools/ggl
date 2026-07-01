@@ -12,8 +12,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # requires-python >= 3.10. The 3.10 leg also exercises the tomli
-        # fallback in tests/test_circuits.py (tomllib is stdlib only on 3.11+).
         python-version: ['3.10', '3.11', '3.12', '3.13']
 
     steps:

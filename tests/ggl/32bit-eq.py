@@ -1,5 +1,3 @@
-import sys
-sys.path.append('../')
 from ggl import arithmetic, circuit, component, io, logic, memory, plexers, wires
 
 circuit0 = circuit.Circuit(js_logging=True)
@@ -84,9 +82,8 @@ circuit0.connect(eight_bit_eq_4.output("EQ"), and0.input("3"))    # eight_bit_eq
 circuit0.connect(and0, output0)    # and0 -> output0
 
 circuit0.run()
-print(output0.value)
+assert output0.value == 0
 input0.value = 255
 input1.value = 255
 circuit0.run()
-print(output0.value)
-circuit0.stop()
+assert output0.value == 1

@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import io, logic, circuit
 
 circuit0 = circuit.Circuit()
@@ -23,6 +20,4 @@ r = io.Output(bits=8, label="R")
 circuit0.connect(nor1, r)
 
 circuit0.run()                              # output should be 64/ 0b01000000
-print(r.value) 
-
-circuit0.stop()
+assert r.value == 64

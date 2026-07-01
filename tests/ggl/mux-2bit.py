@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import io, circuit, plexers
 
 circuit0 = circuit.Circuit()
@@ -30,5 +27,4 @@ r = io.Output(bits=2, label='R')
 circuit0.connect(mux0, r)
 
 circuit0.run()
-print(r.value) # expect 3
-circuit0.stop()
+assert r.value == 3

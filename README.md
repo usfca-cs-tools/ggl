@@ -14,7 +14,6 @@ single source of truth.
 ```
 ggl/
 ├── pyproject.toml      # installable package metadata (src layout)
-├── config.toml         # autograder configuration
 ├── src/ggl/            # the engine package
 │   ├── __init__.py     # package exports
 │   ├── circuit.py      # Circuit: manages nodes and connections
@@ -29,7 +28,7 @@ ggl/
 │   ├── component.py    # hierarchical components
 │   ├── errors.py       # CircuitError for surfacing errors to front-ends
 │   └── ggl_logging.py  # logging helpers (propagate to browser console)
-└── tests/ggl/          # circuit test programs + ggl.toml
+└── tests/ggl/          # self-checking circuit programs
 ```
 
 ## Install
@@ -109,10 +108,9 @@ export ggloglevel='logging.INFO'
 
 ## Tests
 
-`tests/ggl/` contains circuit programs whose expected outputs are recorded in
-`tests/ggl/ggl.toml` (the same file the
-[autograder](https://github.com/phpeterson-usf/autograder) uses, so that
-remains the single source of truth for expected values).
+`tests/ggl/` contains circuit programs, each of which builds a circuit and
+asserts its own expected values. `tests/test_circuits.py` runs every program in
+a subprocess, so a failed assertion fails that case.
 
 Run the suite with pytest:
 
@@ -120,10 +118,3 @@ Run the suite with pytest:
 pip install -e ".[test]"
 pytest
 ```
-
-`tests/test_circuits.py` parametrizes over the `ggl.toml` entries, runs each
-program, and compares output using the same normalization as the autograder
-(case-insensitive, per-line strip). Four programs inherited from golden-gates
-already fail against the engine (the autograder scores 54/58 on this corpus);
-they are marked `xfail` so the suite stays green while the known failures stay
-visible.

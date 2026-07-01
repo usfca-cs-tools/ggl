@@ -1,5 +1,3 @@
-import sys
-sys.path.append('../')
 from ggl import circuit, io, plexers
 
 # Test attribute-style syntax with plexer components  
@@ -26,8 +24,8 @@ for i, inp in enumerate(inputs):
     inp.value = (i + 1) * 10  # 10, 20, 30, 40
 
 # Test selector values
+expected = {0: 10, 2: 30}
 for sel_val in [0, 2]:
     selector.value = sel_val
     circuit0.run()
-    print(output.value)
-    circuit0.stop()
+    assert output.value == expected[sel_val]

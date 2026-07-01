@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit
 from ggl import io
 from ggl import arithmetic
@@ -17,4 +14,4 @@ c.connect(ext, r)
 
 c.run()  
 c.stop()                           # should return 0b11111111 = 255
-print(r.value)
+assert r.value == 255

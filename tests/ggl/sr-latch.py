@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import io, logic, circuit
 
 circuit0 = circuit.Circuit(js_logging=True)
@@ -26,6 +23,5 @@ output2 = io.Output(bits=1, label="NotQ", js_id="output_2")
 circuit0.connect(nor2, output2)    # nor2 -> output2
 
 circuit0.run()
-print(output1.value)
-print(output2.value)
-circuit0.stop()
+assert output1.value == 1
+assert output2.value == 0

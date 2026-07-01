@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit
 from ggl import io
 from ggl import arithmetic
@@ -28,24 +25,22 @@ c.connect(comp.output('lt'),less)
 
 
 c.run()
-print(greater.value)
-print(equal.value)
-print(less.value)
+assert greater.value == 1
+assert equal.value == 0
+assert less.value == 0
 
 a.value = 6
 b.value = 9
 
 c.run()
-print(greater.value)
-print(equal.value)
-print(less.value)
+assert greater.value == 0
+assert equal.value == 0
+assert less.value == 1
 
 a.value = 6
 b.value = 6
 
 c.run()
-print(greater.value)
-print(equal.value)
-print(less.value)
-
-c.stop()
+assert greater.value == 0
+assert equal.value == 1
+assert less.value == 0

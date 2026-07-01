@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit
 from ggl import io
 from ggl import arithmetic
@@ -16,6 +13,4 @@ r = io.Output(bits=8, label='r')
 c.connect(g, r)
 
 c.run()                             # output should be 101
-print(r.value)
-
-c.stop()
+assert r.value == 101

@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit
 from ggl import io
 from ggl import wires
@@ -23,5 +20,4 @@ for i in range(a.bits):
 circuit0.connect(merge, r.inputs[0])
 
 circuit0.run()
-circuit0.stop()
-print(r.value)
+assert r.value == 10

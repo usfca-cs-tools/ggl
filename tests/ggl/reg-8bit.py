@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit, io, memory
 
 cir0 = circuit.Circuit()
@@ -22,6 +19,4 @@ q = io.Output(label='Q', bits=8)
 cir0.connect(reg0.output('Q'), q)
 
 cir0.run()
-print(hex(q.value))  # expect 0xAB
-
-cir0.stop()
+assert q.value == 0xAB

@@ -1,5 +1,3 @@
-import sys
-sys.path.append('../')
 from ggl import circuit, logic, io, plexers
 
 # A positive-edge-triggered D flip-flop with enable and asynchronous clear,
@@ -98,7 +96,7 @@ circuit0.connect(dlatchclr_1.output("Q"), output0)            # slave Q  -> outp
 
 # Settle the initial state: CLR=1 holds Q at 0.
 circuit0.run()
-print(f"CLR=1 (init):        Q={output0.value}")
+assert output0.value == 0
 
 # Release the clear; capture happens only on rising CLK edges (cycle()).
 input2.value = 0
@@ -106,27 +104,25 @@ input2.value = 0
 input0.value = 1
 input1.value = 1
 circuit0.cycle()
-print(f"D=1, EN=1 (capture): Q={output0.value}")
+assert output0.value == 1
 
 # Enable low: the rising edge ignores D and recirculates Q (hold).
 input1.value = 0
 input0.value = 0
 circuit0.cycle()
-print(f"D=0, EN=0 (hold):    Q={output0.value}")
+assert output0.value == 1
 
 # Enable high again captures the new D on the next edge.
 input1.value = 1
 input0.value = 0
 circuit0.cycle()
-print(f"D=0, EN=1 (capture): Q={output0.value}")
+assert output0.value == 0
 
 input0.value = 1
 circuit0.cycle()
-print(f"D=1, EN=1 (capture): Q={output0.value}")
+assert output0.value == 1
 
 # Asynchronous clear forces Q to 0 with no edge.
 input2.value = 1
 circuit0.settle()
-print(f"CLR=1 (async clear): Q={output0.value}")
-
-circuit0.stop()
+assert output0.value == 0

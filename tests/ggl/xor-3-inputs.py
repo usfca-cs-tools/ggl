@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import io, logic, circuit
 
 circuit0 = circuit.Circuit()
@@ -24,4 +21,4 @@ circuit0.connect(xor1, r)
 
 circuit0.run()   
 circuit0.stop()                       # output should be 1 0b0001
-print(r.value) 
+assert r.value == 1

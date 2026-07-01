@@ -1,7 +1,4 @@
 # Seems gross but works
-import sys
-sys.path.append('../')
-
 from ggl import circuit
 from ggl import io
 from ggl import logic
@@ -21,5 +18,4 @@ r = io.Output(bits=1, label='r')
 c.connect(g, r)
 
 c.run()
-c.stop()
-print(r.value)
+assert r.value == 1

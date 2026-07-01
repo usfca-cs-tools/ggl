@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit
 from ggl import io
 from ggl import logic
@@ -73,7 +70,5 @@ test_circuit.connect(fa.output("cout"), test_cout)
 # Run test: 1 + 1 + 0 = 10 (sum=0, carry=1)
 test_circuit.run()
 
-print(test_sum.value)
-print(test_cout.value)
-
-test_circuit.stop()
+assert test_sum.value == 0
+assert test_cout.value == 1

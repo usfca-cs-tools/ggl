@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import io, circuit, plexers
 
 circuit0 = circuit.Circuit()
@@ -21,11 +18,10 @@ r3 = io.Output(bits=1, label='r3')
 circuit0.connect(decoder0.output("3"), r3)
 
 circuit0.run()
-print(r0.value)
-print(r1.value)
-print(r2.value)
-print(r3.value)
-circuit0.stop()
+assert r0.value == 0
+assert r1.value == 0
+assert r2.value == 1
+assert r3.value == 0
 
 """
 expected

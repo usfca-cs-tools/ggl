@@ -1,5 +1,3 @@
-import sys
-sys.path.append('../')
 from ggl import arithmetic, circuit, io
 
 # Test that both old and new syntax work together
@@ -22,5 +20,4 @@ a.value = 100
 b.value = 50
 circuit0.run()
 
-print(sum_out.value)
-circuit0.stop()
+assert sum_out.value == 151

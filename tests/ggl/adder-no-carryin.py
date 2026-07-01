@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit
 from ggl import io
 from ggl import arithmetic
@@ -29,5 +26,4 @@ c.connect(adder.output('cout'), cout)
 
 
 c.run()
-print(sum.value)
-c.stop()
+assert sum.value == 15

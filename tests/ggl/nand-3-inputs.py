@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import io, logic, circuit
 
 circuit0 = circuit.Circuit()
@@ -23,6 +20,4 @@ r = io.Output(bits=4, label="R")
 circuit0.connect(nand1, r)
 
 circuit0.run()
-print(r.value)                  # output should be 10 or 0b1010
-
-circuit0.stop()
+assert r.value == 10

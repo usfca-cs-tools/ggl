@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import io, circuit, plexers
 
 circuit0 = circuit.Circuit()
@@ -30,10 +27,9 @@ circuit0.connect(decoder0.output("any"), any)
 
 circuit0.run()
 
-print(inum.value)
-print(any.value)
+assert inum.value == 2
+assert any.value == 1
 
-circuit0.stop()
 
 """
 expected

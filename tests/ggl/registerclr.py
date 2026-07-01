@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit, io, memory
 
 # Edge-triggered register with asynchronous clear. CLK is driven by a plain
@@ -27,24 +24,24 @@ en.value = 1
 d.value = 0xAB
 clr.value = 1
 c.settle()
-print(hex(q.value))   # 0x0
+assert q.value == 0x0
 
 # 2) Release clear; with the clock still low the register holds 0...
 clr.value = 0
 c.settle()
-print(hex(q.value))   # 0x0
+assert q.value == 0x0
 # ...and loads D on the rising edge.
 clk.value = 1
 c.settle()
-print(hex(q.value))   # 0xab
+assert q.value == 0xab
 
 # 3) Drop the clock and change D: the register holds (edge-triggered, not level).
 clk.value = 0
 d.value = 0x55
 c.settle()
-print(hex(q.value))   # 0xab
+assert q.value == 0xab
 
 # 4) Asynchronous clear again, mid-run, forces 0 regardless of the clock.
 clr.value = 1
 c.settle()
-print(hex(q.value))   # 0x0
+assert q.value == 0x0

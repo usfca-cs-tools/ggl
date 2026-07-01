@@ -1,6 +1,3 @@
-import sys
-sys.path.append('../')
-
 from ggl import circuit
 from ggl import io
 from ggl import arithmetic
@@ -25,5 +22,4 @@ c.connect(cin, sub.input('cin'))
 c.connect(sub.output('s'), difference)
 
 c.run()
-print(difference.value)
-c.stop()
+assert difference.value == 3
