@@ -42,11 +42,21 @@ class NodeInputs:
         return [edge for _, edge in self.points.items()]
 
     def set_edge(self, name, edge):
-        """
-        TODO
-        if self.points[name] is not None:
-            raise SimulatorError("Another Edge is already connected to this inpoint")
-        """
+        # An input is fed by exactly one edge. A second, different edge on the
+        # same port is two wires driving one input — a short circuit. Silently
+        # keeping the last one hides the mistake; raise so it's visible.
+        existing = self.points[name]
+        if existing is not None and existing is not edge:
+            node = self.node
+            driver = existing.srcpoint.node
+            raise CircuitError(
+                component_id=node.js_id,
+                component_type=node.error_kind,
+                component_label=node.label,
+                error_code="inputShortCircuit",
+                port_name=name,
+                connected_component_id=getattr(driver, 'js_id', None),
+            )
         self.points[name] = edge
 
     def get_names(self):

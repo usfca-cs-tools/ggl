@@ -10,6 +10,7 @@ ERROR_CIRCUIT_LOOP = 'simulation.errors.circuitLoop'
 ERROR_COMPONENT_NOT_FOUND = 'simulation.errors.componentNotFound'
 ERROR_INVALID_PORT_CONNECTION = 'simulation.errors.invalidPortConnection'
 ERROR_MULTIPLE_OUTPUTS = 'simulation.errors.multipleOutputs'
+ERROR_INPUT_SHORT_CIRCUIT = 'simulation.errors.inputShortCircuit'
 ERROR_INVALID_COMPONENT_TYPE = 'simulation.errors.invalidComponentType'
 ERROR_SIMULATION_TIMEOUT = 'simulation.errors.simulationTimeout'
 
