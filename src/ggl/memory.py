@@ -22,11 +22,14 @@ class Register(BitsNode):
             named_inputs=[Register.D, Register.CLK, Register.en],
             named_outputs=[Register.Q])
         self.value = random.getrandbits(bits)  # initial state is random
+        self._prev_clk = 0  # last CLK level seen, for rising-edge detection
 
     def propagate(self, output_name='Q', value=0):
         en = self.safe_read_input(Register.en, bits=1)
         clk = self.safe_read_input(Register.CLK, bits=1)
-        if en and clk:
+        rising = self._prev_clk == 0 and clk == 1
+        self._prev_clk = clk
+        if rising and en:
             self.value = self.safe_read_input(Register.D)
         return super().propagate(output_name=output_name, value=self.value)
 

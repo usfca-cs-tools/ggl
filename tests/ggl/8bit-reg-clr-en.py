@@ -8,7 +8,7 @@ circuit0 = circuit.Circuit(js_logging=True)
 input0 = io.Input(label="en", bits=1, js_id="input_1_1753942793773")
 input0.value = 1  # en = 1
 input1 = io.Input(label="CLK", bits=1,js_id="input_2_1753942797910")
-input1.value = 1
+input1.value = 0  # pulse 0 -> 1 below so the edge-triggered registers latch
 input3 = io.Input(label="D", bits=8, js_id="input_4_1753942799097")
 input3.value = 1  # D = 1
 d_flip_flop_1 = memory.Register(bits=1)
@@ -58,5 +58,7 @@ circuit0.connect(d_flip_flop_8.output("Q"), merger0.input("6"))    # d_flip_flop
 circuit0.connect(d_flip_flop_1.output("Q"), merger0.input("7"))    # d_flip_flop_1 -> merger0.in[7]
 circuit0.connect(merger0, output0)    # merger0 -> output0
 
-circuit0.run()
+circuit0.run()          # settle with CLK low so D propagates through the splitter
+input1.value = 1        # rising edge: registers latch their D bits
+circuit0.settle()
 print(output0.value)
