@@ -54,15 +54,11 @@ def _normalize(text, case_sensitive=False):
 
 CASES = _load_cases()
 
-# Tests still failing against the GGL engine as inherited from golden-gates.
-# Marked xfail so the suite stays green while keeping the failure visible — a
-# fix will surface here as an unexpected pass (xpass).
-KNOWN_FAILURES = {
-    # Malformed wiring (stray overwriting connects) leaves an internal
-    # oscillation that never settles; its expected output only arose from the
-    # old output-only convergence. To be rebuilt with the gate-level latch/FF.
-    "d-flip-flop": "malformed circuit: internal non-stabilization",
-}
+# Registry of circuits expected to fail: name -> reason. Entries are marked
+# xfail so the suite stays green while keeping the failure visible — a fix
+# surfaces here as an unexpected pass (xpass). Currently empty; the whole
+# inherited corpus passes.
+KNOWN_FAILURES = {}
 
 
 def _case_params():

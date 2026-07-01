@@ -355,10 +355,12 @@ rubric = 1
 name = "d-flip-flop"
 input = ["python3", "$project_tests/d-flip-flop.py"]
 expected = """
-Test 1: D=1, EN=1, CLR=0 => Q=1
-Test 2: D=0, EN=1, CLR=0 => Q=0
-Test 3: D=1, EN=0, CLR=1 => Q=0
-Test 4: D=1, EN=1, CLR=1 => Q=0
+CLR=1 (init):        Q=0
+D=1, EN=1 (capture): Q=1
+D=0, EN=0 (hold):    Q=1
+D=0, EN=1 (capture): Q=0
+D=1, EN=1 (capture): Q=1
+CLR=1 (async clear): Q=0
 """
 rubric = 1
 
