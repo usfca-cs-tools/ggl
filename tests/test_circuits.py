@@ -54,14 +54,10 @@ def _normalize(text, case_sensitive=False):
 
 CASES = _load_cases()
 
-# Tests that already fail against the GGL engine as inherited from
-# golden-gates (autograder scores 54/58 on the same corpus). Marked xfail so
-# the suite stays green while keeping the known failures visible — a passing
-# run will surface here as an unexpected pass (xpass). priority-4in currently
-# raises in node.py; the other three produce values that differ from the
-# recorded expectations.
+# Tests still failing against the GGL engine as inherited from golden-gates.
+# Marked xfail so the suite stays green while keeping the failure visible — a
+# fix will surface here as an unexpected pass (xpass).
 KNOWN_FAILURES = {
-    "d-latch-clr": "pre-existing failure: output mismatch",
     # Malformed wiring (stray overwriting connects) leaves an internal
     # oscillation that never settles; its expected output only arose from the
     # old output-only convergence. To be rebuilt with the gate-level latch/FF.
