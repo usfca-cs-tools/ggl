@@ -1,0 +1,12 @@
+{
+  "packages": [
+    "python@3.12",
+    "git@latest"
+  ],
+  "shell": {
+    "init_hook": [
+      "echo \"GGL dev environment\"",
+      "echo \"  Python:  $(python --version)\"",
+    ]
+  }
+}
