@@ -1,4 +1,5 @@
 from .ggl_logging import new_logger
+from . import callbacks
 
 logger = new_logger(__name__)
 
@@ -85,18 +86,7 @@ class Edge:
         if gate_on_change and self.value == value and self.prev_value is not None:
             return []
 
-        if self.js_id is not None:
-            try:
-                import builtins
-                # If we have a JS object ID and we're running under pyodide,
-                # use the pyodide API to update the value of the JS object
-                if self.js_id and hasattr(builtins, 'updateCallback'):
-                    active = value == 1
-                    updateCallback = builtins.updateCallback
-                    updateCallback('step', self.js_id, {
-                                   'active': active, 'style': 'processing'})
-            except Exception as e:
-                logger.error(f'Callback failed: {e}')
+        callbacks.emit('step', self.js_id, {'active': value == 1, 'style': 'processing'})
 
         self.prev_value = self.value
         self.value = value

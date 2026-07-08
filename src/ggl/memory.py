@@ -2,6 +2,7 @@ import random
 
 from .node import BitsNode
 from .ggl_logging import new_logger
+from . import callbacks
 
 logger = new_logger(__name__)
 
@@ -128,17 +129,7 @@ class Addressable(BitsNode):
                 f'Addressable value {val} overflows {self.data_bits} bits')
             val &= self.mask()
         self.memory[addr] = val
-        
-        # Send memory update callback for UI reactivity
-        try:
-            import builtins
-            if self.js_id and hasattr(builtins, 'updateCallback'):
-                updateCallback = builtins.updateCallback
-                # Send memory event with address and value as dict
-                memory_data = {'address': addr, 'value': val}
-                updateCallback('memory', self.js_id, memory_data)
-        except Exception as e:
-            logger.error(f'Memory callback failed: {e}')
+        callbacks.emit('memory', self.js_id, {'address': addr, 'value': val})
 
 
 class ROM(Addressable):

@@ -1,5 +1,6 @@
 from .node import Node, BitsNode
 from .ggl_logging import new_logger
+from . import callbacks
 
 logger = new_logger(__name__)
 
@@ -126,17 +127,7 @@ class Output(IONode):
     def propagate(self, output_name='0', value=0):
         self.value = self.safe_read_input('0')
         logger.info(f"{self.kind} '{self.label}' gets value {self.value}")
-
-        try:
-            import builtins
-            # If we have a JS object ID and we're running under pyodide,
-            # use the pyodide API to update the value of the JS object
-            if self.js_id and hasattr(builtins, 'updateCallback'):
-                updateCallback = builtins.updateCallback
-                # Use simple event protocol: (eventType, componentId, value)
-                updateCallback('value', self.js_id, self.value)
-        except Exception as e:
-            logger.error(f'Callback failed: {e}')
+        callbacks.emit('value', self.js_id, self.value)
 
 
 class ChildOutput(Output):

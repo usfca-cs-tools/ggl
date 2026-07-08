@@ -7,6 +7,7 @@ from .ggl_logging import new_logger, set_global_js_logging
 from .io import Input, Output, Clock
 from .errors import CircuitError
 from . import edge as edge_module
+from . import callbacks
 
 logger = new_logger(__name__)
 
@@ -103,11 +104,15 @@ class Circuit:
         (e.g. a combinational loop), which is warned.
         """
         cap = max(MAX_ITERATIONS, len(self.all_nodes) + 1)
-        for i in range(cap):
-            if not self.step():
-                return i + 1
-        logger.warning("Circuit did not stabilize")
-        return cap
+        callbacks.start_batch()
+        try:
+            for i in range(cap):
+                if not self.step():
+                    return i + 1
+            logger.warning("Circuit did not stabilize")
+            return cap
+        finally:
+            callbacks.flush_batch()
 
     def run(self):
         """
