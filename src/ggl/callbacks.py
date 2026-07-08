@@ -1,15 +1,14 @@
 """Front-end update callbacks, coalesced per settle().
 
-Components report updates through ``builtins.updateCallback`` (installed by the
-Pyodide host). Firing one call per node per relaxation pass floods the JS
-boundary; instead settle() opens a batch, emit() accumulates, and one
-``updateCallback('batch', None, updates)`` crosses at the end.
+The host registers a callback with set_callback(fn). Firing one call per node
+per relaxation pass floods the JS boundary; instead settle() opens a batch,
+emit() accumulates, and one ``fn('batch', None, updates)`` crosses at the end.
 
 value/step updates collapse by js_id (last write wins — the settled value is all
 the UI needs); memory writes are kept in order since a single component can
 write several addresses in one settle.
 
-With no updateCallback installed (headless), batching stays off and emit() is a
+With no callback registered (headless), batching stays off and emit() is a
 cheap no-op.
 """
 
@@ -19,16 +18,19 @@ from .ggl_logging import new_logger
 
 logger = new_logger(__name__)
 
-_scalar = None   # js_id -> (event, payload); None means "not batching"
-_memory = None   # list of (js_id, payload)
+_host_callback = None   # set by the host via set_callback(fn)
+_scalar = None          # js_id -> (event, payload); None means "not batching"
+_memory = None          # list of (js_id, payload)
+
+
+def set_callback(fn):
+    """Register the host's update callback (or None to clear)."""
+    global _host_callback
+    _host_callback = fn
 
 
 def _sink():
-    # Resolve builtins at call time: Pyodide can swap sys.modules['builtins']
-    # after this module loads, so a cached reference goes stale and never sees
-    # the host's updateCallback.
-    import builtins
-    return getattr(builtins, "updateCallback", None)
+    return _host_callback
 
 
 def start_batch():
