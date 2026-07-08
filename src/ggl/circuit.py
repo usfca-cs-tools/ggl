@@ -103,10 +103,11 @@ class Circuit:
         (e.g. a combinational loop), which is warned.
         """
         cap = max(MAX_ITERATIONS, len(self.all_nodes) + 1)
-        for _ in range(cap):
+        for i in range(cap):
             if not self.step():
-                return
+                return i + 1
         logger.warning("Circuit did not stabilize")
+        return cap
 
     def run(self):
         """
@@ -146,17 +147,32 @@ class Circuit:
         """
         import time
         self.running = True
+        passes = 0
         start = time.perf_counter()
         for _ in range(iterations):
             if self.clock is not None:
                 self.clock.value = 1 - self.clock.value
-            self.settle()
+            passes += self.settle()
         elapsed = time.perf_counter() - start
         return {
             "iterations": iterations,
             "total_s": elapsed,
             "per_iter_ms": elapsed / iterations * 1e3,
+            "avg_passes": passes / iterations,
+            "deep_nodes": self._deep_node_count(),
         }
+
+    def _deep_node_count(self):
+        """Total nodes including those inside embedded CircuitNode subcircuits.
+        all_nodes is only the top level; a gate-level counter hides most of its
+        gates one or more levels down."""
+        total = 0
+        for n in self.all_nodes:
+            total += 1
+            sub = getattr(n, "circuit", None)
+            if hasattr(n, "_input_mapping") and sub is not None:
+                total += sub._deep_node_count()
+        return total
 
     async def run_async(self):
         """
