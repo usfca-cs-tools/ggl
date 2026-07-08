@@ -14,6 +14,7 @@ cheap no-op.
 """
 
 import builtins
+import json
 
 from .ggl_logging import new_logger
 
@@ -58,8 +59,9 @@ def flush_batch():
         return
     updates = [[event, jid, payload] for jid, (event, payload) in scalar.items()]
     updates += [["memory", jid, payload] for jid, payload in memory]
+    # Pass a JSON string, not a nested list — proxies don't cross cleanly.
     try:
-        fn("batch", None, updates)
+        fn("batch", None, json.dumps(updates))
     except Exception as e:
         logger.error(f"Batch callback failed: {e}")
 
