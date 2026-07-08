@@ -135,6 +135,29 @@ class Circuit:
         self.clock.value = 0
         self.settle()
 
+    def benchmark(self, iterations=1000):
+        """Time `iterations` of clock-toggle + settle() with no real-time
+        pacing — one iteration is the work run_async() does per clock edge.
+
+        Returns per-iteration wall time so the free-running clock's ceiling can
+        be compared against the engine's actual cost. Remove the front-end
+        callback (``del builtins.updateCallback``) between runs to measure its
+        share of that cost.
+        """
+        import time
+        self.running = True
+        start = time.perf_counter()
+        for _ in range(iterations):
+            if self.clock is not None:
+                self.clock.value = 1 - self.clock.value
+            self.settle()
+        elapsed = time.perf_counter() - start
+        return {
+            "iterations": iterations,
+            "total_s": elapsed,
+            "per_iter_ms": elapsed / iterations * 1e3,
+        }
+
     async def run_async(self):
         """
         Long-running asynchronous simulation for the browser/Pyodide: a
