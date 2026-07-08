@@ -13,7 +13,6 @@ With no updateCallback installed (headless), batching stays off and emit() is a
 cheap no-op.
 """
 
-import builtins
 import json
 
 from .ggl_logging import new_logger
@@ -25,6 +24,10 @@ _memory = None   # list of (js_id, payload)
 
 
 def _sink():
+    # Resolve builtins at call time: Pyodide can swap sys.modules['builtins']
+    # after this module loads, so a cached reference goes stale and never sees
+    # the host's updateCallback.
+    import builtins
     return getattr(builtins, "updateCallback", None)
 
 
