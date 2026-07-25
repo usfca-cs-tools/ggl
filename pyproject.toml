@@ -17,12 +17,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
 ]
 
-[project.optional-dependencies]
-# Tooling for running the test suite as pytest (see tests/).
-test = [
-    "pytest>=7.0",
-]
-
 [tool.setuptools.packages.find]
 where = ["src"]
 
@@ -30,4 +24,9 @@ where = ["src"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 pythonpath = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
 
