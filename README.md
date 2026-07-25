@@ -115,6 +115,5 @@ a subprocess, so a failed assertion fails that case.
 Run the suite with pytest:
 
 ```sh
-pip install -e ".[test]"
-pytest
+uv run pytest
 ```
