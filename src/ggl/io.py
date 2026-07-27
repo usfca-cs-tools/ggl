@@ -1,4 +1,5 @@
 from .node import Node, BitsNode
+from .errors import CircuitError
 from .ggl_logging import new_logger
 from . import callbacks
 
@@ -232,39 +233,47 @@ class Test(Node):
         self.rows = [list(r) for r in (rows or [])]
         super().__init__(kind=Test.kind, js_id=js_id, label=label)
 
-    def _resolve(self, nodes, name, kind, result):
-        """Return the one node whose label == name. Labels are not guaranteed
-        unique, so record a readable error for a missing or ambiguous name."""
+    def _resolve(self, nodes, name, not_found_code):
+        """Return the one circuit node whose label == name, or raise a
+        CircuitError for a missing or ambiguous name. Labels are not guaranteed
+        unique, so an ambiguous name is a distinct error."""
         matches = [n for n in nodes if n.label == name]
         if not matches:
-            result['errors'].append(f"{kind} '{name}' not found")
-            return None
+            self._raise(not_found_code, name=name)
         if len(matches) > 1:
-            result['errors'].append(
-                f"{kind} '{name}' is ambiguous "
-                f"({len(matches)} components share this label)")
-            return None
+            self._raise('testAmbiguousLabel', name=name)
         return matches[0]
 
-    def evaluate(self, circuit):
-        """Run every row of the truth table. Returns
-        {label, passed, failures, errors} and emits it as a 'test' event."""
-        result = {
-            'label': self.label,
-            'passed': False,
-            'failures': [],
-            'errors': [],
-        }
+    def _raise(self, error_code, **fields):
+        """Signal a failing Test the same way the engine signals open inputs and
+        bit-width mismatches: badge the component as failed, then raise a
+        CircuitError carrying an error_code + fields for the front end to localize
+        and display (highlight + message)."""
+        callbacks.emit('test', self.js_id, {'label': self.label, 'passed': False})
+        raise CircuitError(
+            component_id=self.js_id,
+            component_type=Test.kind,
+            component_label=self.label,
+            error_code=error_code,
+            **fields)
 
-        # Resolve the columns to circuit nodes once. A bad column name is an
-        # error that applies to the whole table, so bail before running any row.
-        in_nodes = [self._resolve(circuit.inputs, n, 'Input', result)
+    def evaluate(self, circuit):
+        """Run the truth table one row at a time. On the FIRST problem — a bad
+        column name, a malformed row, or a failing row — restore the circuit's
+        inputs and raise a CircuitError, which the front end surfaces exactly like
+        an open-input or bit-width error (component highlighted + localized
+        message). On success, emit a 'test' pass event (for the badge) and return.
+
+        Surfacing one problem at a time matches the rest of the app's error model.
+        (The aggregate 'report every failing row' behavior that headless grading
+        will want is a planned follow-on.)
+        """
+        # Resolve columns first; nothing is driven yet, so there's nothing to
+        # restore if a name is bad.
+        in_nodes = [self._resolve(circuit.inputs, n, 'testInputNotFound')
                     for n in self.input_names]
-        out_nodes = [self._resolve(circuit.outputs, n, 'Output', result)
+        out_nodes = [self._resolve(circuit.outputs, n, 'testOutputNotFound')
                      for n in self.output_names]
-        if result['errors']:
-            callbacks.emit('test', self.js_id, result)
-            return result
 
         n_in = len(self.input_names)
         width = n_in + len(self.output_names)
@@ -280,16 +289,20 @@ class Test(Node):
             finally:
                 circuit.auto_propagate = prev_auto
 
-        # Snapshot the driven inputs so the live circuit can be restored after the
-        # run — otherwise its display is left stuck on the last row's vector,
-        # which makes the on-canvas outputs disagree with the on-canvas inputs.
+        # Snapshot inputs so the live circuit can be returned to its authored
+        # state whether the test passes or fails — otherwise the on-canvas outputs
+        # would be left showing some test row's values.
         saved_inputs = [(node, node.value) for node in in_nodes]
+
+        def restore():
+            drive(saved_inputs)
+            circuit.run()
 
         for i, row in enumerate(self.rows, start=1):
             if len(row) != width:
-                result['errors'].append(
-                    f"Row {i} has {len(row)} values, expected {width}")
-                continue
+                restore()
+                self._raise('testRowWidth', row=i, actual=len(row),
+                            expected=width)
             in_vals, out_vals = row[:n_in], row[n_in:]
             drive(zip(in_nodes, in_vals))
             circuit.run()
@@ -300,17 +313,12 @@ class Test(Node):
                 if actual != expected:
                     in_desc = ", ".join(
                         f"{n}={v}" for n, v in zip(self.input_names, in_vals))
-                    result['failures'].append(
-                        f"For {in_desc}: expected {name}={expected}, "
-                        f"got {actual}")
+                    restore()
+                    self._raise('testFailed', inputs=in_desc, output=name,
+                                expected=expected, actual=actual)
 
-        # Restore inputs to their pre-test values and settle once, so the live
-        # circuit's outputs reflect its authored inputs, not the last row.
-        drive(saved_inputs)
-        circuit.run()
-
-        result['passed'] = not result['failures'] and not result['errors']
-        logger.info(
-            f"Test '{self.label}' {'passed' if result['passed'] else 'failed'}")
-        callbacks.emit('test', self.js_id, result)
-        return result
+        # Every row passed: leave the circuit at its authored inputs and badge it.
+        restore()
+        logger.info(f"Test '{self.label}' passed")
+        callbacks.emit('test', self.js_id, {'label': self.label, 'passed': True})
+        return {'label': self.label, 'passed': True}
