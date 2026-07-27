@@ -28,15 +28,14 @@ name = "ggl"
 version = "0.1.0"
 source = { editable = "." }
 
-[package.dev-dependencies]
-dev = [
+[package.optional-dependencies]
+test = [
     { name = "pytest" },
 ]
 
 [package.metadata]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.1.1" }]
+requires-dist = [{ name = "pytest", marker = "extra == 'test'", specifier = ">=9.1.1" }]
+provides-extras = ["test"]
 
 [[package]]
 name = "iniconfig"
