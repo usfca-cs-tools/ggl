@@ -198,33 +198,82 @@ class Clock(IONode):
         return super().propagate(value=self.value)
 
 
-# class Test(Node):
-#     """
-#     Test is a test case in which the circuit's output values are tested
-#     against the provided input values
-#     """
-#     kind = 'Test'
+class Test(Node):
+    """
+    A Test is a verification directive rather than a circuit element: it drives
+    a set of named Inputs to given values, settles the circuit, and checks a set
+    of named Outputs against expected values. It has no connections — it refers
+    to Inputs/Outputs by their label.
 
-#     def __init__(self, label='', js_id='', input_specs={}, output_specs={}):
-#         self.input_specs = input_specs
-#         self.output_specs = output_specs
-#         super().__init__(
-#             kind=Test.kind,
-#             js_id=js_id,
-#             label=label
-#         )
+    evaluate(circuit) is the single source of truth for pass/fail. It returns a
+    structured result AND emits a 'test' callback, so the identical logic serves
+    both the headless grading path (read the return value) and the interactive
+    editor (the callback badges the component).
+    """
 
-#     def init_inputs(self, inputs):
-#         # When simulation starts, set each Input's value to be the test value
-#         for i in inputs:
-#             v = self.input_specs[i.label]
-#             i.value = v
+    kind = 'Test'
 
-#     def test_outputs(self, outputs):
-#         # When simulation ends, check each Output's value against the expected
-#         failures = {}
-#         for o in outputs:
-#             v = self.output_specs[o.label]
-#             if o.value != v:
-#                 failures[o.name] = o.value
-#         return failures
+    def __init__(self, label='', js_id='', input_specs=None, output_specs=None):
+        # dict(... or {}) copies and avoids the shared-mutable-default footgun.
+        self.input_specs = dict(input_specs or {})
+        self.output_specs = dict(output_specs or {})
+        super().__init__(kind=Test.kind, js_id=js_id, label=label)
+
+    def _resolve(self, nodes, name, kind, result):
+        """Return the one node whose label == name. Labels are not guaranteed
+        unique, so record a readable error for a missing or ambiguous name."""
+        matches = [n for n in nodes if n.label == name]
+        if not matches:
+            result['errors'].append(f"{kind} '{name}' not found")
+            return None
+        if len(matches) > 1:
+            result['errors'].append(
+                f"{kind} '{name}' is ambiguous "
+                f"({len(matches)} components share this label)")
+            return None
+        return matches[0]
+
+    def evaluate(self, circuit):
+        """Drive the named inputs, settle the circuit, and compare the named
+        outputs to their expected values. Returns
+        {label, passed, failures, errors} and emits it as a 'test' event."""
+        result = {
+            'label': self.label,
+            'passed': False,
+            'failures': [],
+            'errors': [],
+        }
+
+        # Set every input first, suppressing the per-assignment re-propagation so
+        # the whole vector settles once (and in a single batch) via run() below.
+        prev_auto = circuit.auto_propagate
+        circuit.auto_propagate = False
+        try:
+            for name, value in self.input_specs.items():
+                node = self._resolve(circuit.inputs, name, 'Input', result)
+                if node is not None:
+                    node.value = value
+        finally:
+            circuit.auto_propagate = prev_auto
+
+        # A misnamed input means this vector can't be run meaningfully.
+        if result['errors']:
+            callbacks.emit('test', self.js_id, result)
+            return result
+
+        circuit.run()
+
+        for name, expected in self.output_specs.items():
+            node = self._resolve(circuit.outputs, name, 'Output', result)
+            if node is None:
+                continue
+            actual = node.value
+            if actual != expected:
+                result['failures'].append(
+                    f"Output {name} was {actual}, expected {expected}")
+
+        result['passed'] = not result['failures'] and not result['errors']
+        logger.info(
+            f"Test '{self.label}' {'passed' if result['passed'] else 'failed'}")
+        callbacks.emit('test', self.js_id, result)
+        return result
