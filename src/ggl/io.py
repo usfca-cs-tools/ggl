@@ -200,23 +200,36 @@ class Clock(IONode):
 
 class Test(Node):
     """
-    A Test is a verification directive rather than a circuit element: it drives
-    a set of named Inputs to given values, settles the circuit, and checks a set
-    of named Outputs against expected values. It has no connections — it refers
-    to Inputs/Outputs by their label.
+    A Test is a verification directive rather than a circuit element: it is a
+    truth table. It names Input columns and Output columns (by component label),
+    and holds one row per test vector. For each row it drives the named Inputs to
+    that row's values, settles the circuit, and checks the named Outputs against
+    that row's expected values.
+
+    Data model:
+      input_names:  ['A', 'B']            (labels of Input components)
+      output_names: ['Y']                 (labels of Output components)
+      rows:         [[0, 0, 0],           (each row is input values then output
+                     [0, 1, 0],            values, in column order:
+                     [1, 0, 0],            input_names + output_names)
+                     [1, 1, 1]]
 
     evaluate(circuit) is the single source of truth for pass/fail. It returns a
     structured result AND emits a 'test' callback, so the identical logic serves
     both the headless grading path (read the return value) and the interactive
-    editor (the callback badges the component).
+    editor (the callback badges the component). This handles combinational
+    circuits (each row is an independent settle); clocked/sequential support is a
+    planned follow-on.
     """
 
     kind = 'Test'
 
-    def __init__(self, label='', js_id='', input_specs=None, output_specs=None):
-        # dict(... or {}) copies and avoids the shared-mutable-default footgun.
-        self.input_specs = dict(input_specs or {})
-        self.output_specs = dict(output_specs or {})
+    def __init__(self, label='', js_id='', input_names=None, output_names=None,
+                 rows=None):
+        # list(... or []) copies and avoids the shared-mutable-default footgun.
+        self.input_names = list(input_names or [])
+        self.output_names = list(output_names or [])
+        self.rows = [list(r) for r in (rows or [])]
         super().__init__(kind=Test.kind, js_id=js_id, label=label)
 
     def _resolve(self, nodes, name, kind, result):
@@ -234,8 +247,7 @@ class Test(Node):
         return matches[0]
 
     def evaluate(self, circuit):
-        """Drive the named inputs, settle the circuit, and compare the named
-        outputs to their expected values. Returns
+        """Run every row of the truth table. Returns
         {label, passed, failures, errors} and emits it as a 'test' event."""
         result = {
             'label': self.label,
@@ -244,33 +256,47 @@ class Test(Node):
             'errors': [],
         }
 
-        # Set every input first, suppressing the per-assignment re-propagation so
-        # the whole vector settles once (and in a single batch) via run() below.
-        prev_auto = circuit.auto_propagate
-        circuit.auto_propagate = False
-        try:
-            for name, value in self.input_specs.items():
-                node = self._resolve(circuit.inputs, name, 'Input', result)
-                if node is not None:
-                    node.value = value
-        finally:
-            circuit.auto_propagate = prev_auto
-
-        # A misnamed input means this vector can't be run meaningfully.
+        # Resolve the columns to circuit nodes once. A bad column name is an
+        # error that applies to the whole table, so bail before running any row.
+        in_nodes = [self._resolve(circuit.inputs, n, 'Input', result)
+                    for n in self.input_names]
+        out_nodes = [self._resolve(circuit.outputs, n, 'Output', result)
+                     for n in self.output_names]
         if result['errors']:
             callbacks.emit('test', self.js_id, result)
             return result
 
-        circuit.run()
+        n_in = len(self.input_names)
+        width = n_in + len(self.output_names)
+        prev_auto = circuit.auto_propagate
 
-        for name, expected in self.output_specs.items():
-            node = self._resolve(circuit.outputs, name, 'Output', result)
-            if node is None:
+        for i, row in enumerate(self.rows, start=1):
+            if len(row) != width:
+                result['errors'].append(
+                    f"Row {i} has {len(row)} values, expected {width}")
                 continue
-            actual = node.value
-            if actual != expected:
-                result['failures'].append(
-                    f"Output {name} was {actual}, expected {expected}")
+            in_vals, out_vals = row[:n_in], row[n_in:]
+
+            # Set all inputs first, suppressing per-assignment propagation so the
+            # row settles once (in a single batch) via run() below.
+            circuit.auto_propagate = False
+            try:
+                for node, value in zip(in_nodes, in_vals):
+                    node.value = value
+            finally:
+                circuit.auto_propagate = prev_auto
+
+            circuit.run()
+
+            for name, node, expected in zip(
+                    self.output_names, out_nodes, out_vals):
+                actual = node.value
+                if actual != expected:
+                    in_desc = ", ".join(
+                        f"{n}={v}" for n, v in zip(self.input_names, in_vals))
+                    result['failures'].append(
+                        f"Row {i} ({in_desc}): Output {name} "
+                        f"was {actual}, expected {expected}")
 
         result['passed'] = not result['failures'] and not result['errors']
         logger.info(
