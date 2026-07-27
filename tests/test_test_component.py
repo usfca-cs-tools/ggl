@@ -44,7 +44,7 @@ def test_and_gate_truth_table_passes():
     assert result["errors"] == []
 
 
-def test_failing_row_names_the_row_and_columns():
+def test_failing_row_names_the_inputs_and_columns():
     c = make_and_gate()
     # Same table but the last row expects Y=0 for A=1,B=1 (should be 1).
     rows = [[0, 0, 0], [0, 1, 0], [1, 0, 0], [1, 1, 0]]
@@ -52,7 +52,21 @@ def test_failing_row_names_the_row_and_columns():
                 input_names=["A", "B"], output_names=["Y"], rows=rows)
     result = t.evaluate(c)
     assert result["passed"] is False
-    assert result["failures"] == ["Row 4 (A=1, B=1): Output Y was 1, expected 0"]
+    assert result["failures"] == ["For A=1, B=1: expected Y=0, got 1"]
+
+
+def test_restores_inputs_after_run():
+    # After the table runs, the circuit must reflect its authored inputs (A=0,
+    # B=0 -> Y=0), not the last row it drove (A=1, B=1 -> Y=1).
+    c = make_and_gate()  # A and B authored to 0
+    t = io.Test(label="AND", js_id="t1",
+                input_names=["A", "B"], output_names=["Y"], rows=AND_ROWS)
+    t.evaluate(c)
+    a = next(i for i in c.inputs if i.label == "A")
+    b = next(i for i in c.inputs if i.label == "B")
+    y = next(o for o in c.outputs if o.label == "Y")
+    assert (a.value, b.value) == (0, 0)
+    assert y.value == 0
 
 
 def test_multiple_output_columns():

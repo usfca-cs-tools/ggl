@@ -270,22 +270,28 @@ class Test(Node):
         width = n_in + len(self.output_names)
         prev_auto = circuit.auto_propagate
 
+        def drive(pairs):
+            # Set inputs with auto-propagate off so the vector settles once, via
+            # the explicit run() that follows.
+            circuit.auto_propagate = False
+            try:
+                for node, value in pairs:
+                    node.value = value
+            finally:
+                circuit.auto_propagate = prev_auto
+
+        # Snapshot the driven inputs so the live circuit can be restored after the
+        # run — otherwise its display is left stuck on the last row's vector,
+        # which makes the on-canvas outputs disagree with the on-canvas inputs.
+        saved_inputs = [(node, node.value) for node in in_nodes]
+
         for i, row in enumerate(self.rows, start=1):
             if len(row) != width:
                 result['errors'].append(
                     f"Row {i} has {len(row)} values, expected {width}")
                 continue
             in_vals, out_vals = row[:n_in], row[n_in:]
-
-            # Set all inputs first, suppressing per-assignment propagation so the
-            # row settles once (in a single batch) via run() below.
-            circuit.auto_propagate = False
-            try:
-                for node, value in zip(in_nodes, in_vals):
-                    node.value = value
-            finally:
-                circuit.auto_propagate = prev_auto
-
+            drive(zip(in_nodes, in_vals))
             circuit.run()
 
             for name, node, expected in zip(
@@ -295,8 +301,13 @@ class Test(Node):
                     in_desc = ", ".join(
                         f"{n}={v}" for n, v in zip(self.input_names, in_vals))
                     result['failures'].append(
-                        f"Row {i} ({in_desc}): Output {name} "
-                        f"was {actual}, expected {expected}")
+                        f"For {in_desc}: expected {name}={expected}, "
+                        f"got {actual}")
+
+        # Restore inputs to their pre-test values and settle once, so the live
+        # circuit's outputs reflect its authored inputs, not the last row.
+        drive(saved_inputs)
+        circuit.run()
 
         result['passed'] = not result['failures'] and not result['errors']
         logger.info(
