@@ -8,7 +8,7 @@ success it emits a 'test' pass event and returns.
 
 import pytest
 
-from ggl import callbacks, circuit, io, logic
+from ggl import arithmetic, callbacks, circuit, io, logic, memory
 from ggl.errors import CircuitError
 
 
@@ -165,3 +165,76 @@ def test_emits_fail_badge_before_raising():
         t.evaluate(c)
     test_events = [e for e in events if e[0] == "test"]
     assert test_events and test_events[-1][2]["passed"] is False
+
+
+# --- Clocked "stop when output reaches a value" mode ------------------------
+
+def make_counter():
+    """8-bit up-counter driven by a Clock, cleared to 0. Outputs:
+    'count' (the counter) and 'flag' (a constant 42, to sample at the stop)."""
+    c = circuit.Circuit()
+    clk = io.Clock(label="CLK")
+    clr = io.Input(label="CLR", bits=1); clr.value = 0
+    reg = memory.RegisterClr(label="REG", bits=8)
+    adder = arithmetic.Adder(label="+", bits=8)
+    en = io.Constant(bits=1); en.value = 1
+    inc = io.Constant(bits=8); inc.value = 1
+    cin = io.Constant(bits=1); cin.value = 0
+    c.connect(clk, reg.input("CLK"))
+    c.connect(clr, reg.input("CLR"))
+    c.connect(en, reg.input("en"))
+    c.connect(inc, adder.input("b"))
+    c.connect(cin, adder.input("cin"))
+    c.connect(adder.output("sum"), reg.input("D"))
+    c.connect(reg.output("Q"), io.Output(label="count", bits=8, js_id="count"))
+    c.connect(reg.output("Q"), adder.input("a"))
+    flag_const = io.Constant(bits=8); flag_const.value = 42
+    c.connect(flag_const, io.Output(label="flag", bits=8, js_id="flag"))
+    # Clear to a known 0 (register has no defined power-up state).
+    clr.value = 1; c.run(); clr.value = 0; c.settle()
+    return c
+
+
+def test_clocked_runs_until_stop_then_checks_pass():
+    c = make_counter()
+    # Pulse the clock until 'count' reaches 5, then sample 'flag' (== 42).
+    t = io.Test(label="run", js_id="t1",
+                input_names=[], output_names=["flag"], rows=[[42]],
+                stop_enabled=True, stop_output_name="count", stop_output_value=5)
+    assert t.evaluate(c)["passed"] is True
+
+
+def test_clocked_wrong_sampled_output_fails():
+    c = make_counter()
+    t = io.Test(label="run", js_id="t1",
+                input_names=[], output_names=["flag"], rows=[[41]],  # flag is 42
+                stop_enabled=True, stop_output_name="count", stop_output_value=5)
+    with pytest.raises(CircuitError) as ei:
+        t.evaluate(c)
+    d = ei.value.to_dict()
+    assert ei.value.error_code == "testFailed"
+    assert (d["output"], d["expected"], d["actual"]) == ("flag", 41, 42)
+    assert "count=5" in d["inputs"]   # the stop condition is described
+
+
+def test_clocked_stop_never_reached_fails():
+    c = make_counter()
+    t = io.Test(label="run", js_id="t1",
+                input_names=[], output_names=["flag"], rows=[[42]],
+                stop_enabled=True, stop_output_name="count", stop_output_value=200,
+                max_cycles=10)   # count only reaches 10 in 10 cycles
+    with pytest.raises(CircuitError) as ei:
+        t.evaluate(c)
+    d = ei.value.to_dict()
+    assert ei.value.error_code == "testStopNotReached"
+    assert (d["name"], d["value"], d["cycles"]) == ("count", 200, 10)
+
+
+def test_clocked_without_a_clock_fails():
+    c = make_and_gate()  # combinational, no clock
+    t = io.Test(label="x", js_id="t1",
+                input_names=["A", "B"], output_names=["Y"], rows=[[0, 0, 0]],
+                stop_enabled=True, stop_output_name="Y", stop_output_value=1)
+    with pytest.raises(CircuitError) as ei:
+        t.evaluate(c)
+    assert ei.value.error_code == "testNoClock"

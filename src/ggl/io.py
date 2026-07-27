@@ -218,19 +218,33 @@ class Test(Node):
     evaluate(circuit) is the single source of truth for pass/fail. It returns a
     structured result AND emits a 'test' callback, so the identical logic serves
     both the headless grading path (read the return value) and the interactive
-    editor (the callback badges the component). This handles combinational
-    circuits (each row is an independent settle); clocked/sequential support is a
-    planned follow-on.
+    editor (the callback badges the component).
+
+    Two modes:
+      - combinational (default): each row is set-inputs, settle, check-outputs.
+      - clocked (stop_enabled): each row sets the input columns as the initial
+        state, then pulses the clock until the stop_output_name output reaches
+        stop_output_value (capped at max_cycles), then checks the output columns
+        at that point. For sequential circuits — e.g. a processor running until a
+        DONE signal goes high.
     """
 
     kind = 'Test'
 
     def __init__(self, label='', js_id='', input_names=None, output_names=None,
-                 rows=None):
+                 rows=None, stop_enabled=False, stop_output_name='',
+                 stop_output_value=1, max_cycles=10000):
         # list(... or []) copies and avoids the shared-mutable-default footgun.
         self.input_names = list(input_names or [])
         self.output_names = list(output_names or [])
         self.rows = [list(r) for r in (rows or [])]
+        # Clocked mode: pulse the clock until an output reaches a value, then
+        # check the expected outputs. max_cycles is a safety cap (not surfaced in
+        # the UI); the other three are set from the property panel.
+        self.stop_enabled = bool(stop_enabled)
+        self.stop_output_name = stop_output_name or ''
+        self.stop_output_value = stop_output_value
+        self.max_cycles = max_cycles
         super().__init__(kind=Test.kind, js_id=js_id, label=label)
 
     def _resolve(self, nodes, name, not_found_code):
@@ -275,6 +289,14 @@ class Test(Node):
         out_nodes = [self._resolve(circuit.outputs, n, 'testOutputNotFound')
                      for n in self.output_names]
 
+        # Clocked mode needs a clock and a valid stop output.
+        stop_node = None
+        if self.stop_enabled:
+            if circuit.clock is None:
+                self._raise('testNoClock')
+            stop_node = self._resolve(
+                circuit.outputs, self.stop_output_name, 'testOutputNotFound')
+
         n_in = len(self.input_names)
         width = n_in + len(self.output_names)
         prev_auto = circuit.auto_propagate
@@ -307,12 +329,32 @@ class Test(Node):
             drive(zip(in_nodes, in_vals))
             circuit.run()
 
+            # Clocked: pulse the clock until the stop output reaches its value
+            # (or give up), then sample the outputs at that point.
+            stop_desc = ""
+            if self.stop_enabled:
+                cycles = 0
+                while (stop_node.value != self.stop_output_value
+                        and cycles < self.max_cycles):
+                    circuit.cycle()
+                    cycles += 1
+                if stop_node.value != self.stop_output_value:
+                    restore()
+                    self._raise('testStopNotReached',
+                                name=self.stop_output_name,
+                                value=self.stop_output_value,
+                                cycles=self.max_cycles)
+                stop_desc = f"{self.stop_output_name}={self.stop_output_value}"
+
             for name, node, expected in zip(
                     self.output_names, out_nodes, out_vals):
                 actual = node.value
                 if actual != expected:
-                    in_desc = ", ".join(
-                        f"{n}={v}" for n, v in zip(self.input_names, in_vals))
+                    parts = [f"{n}={v}"
+                             for n, v in zip(self.input_names, in_vals)]
+                    if stop_desc:
+                        parts.append(stop_desc)
+                    in_desc = ", ".join(parts)
                     restore()
                     self._raise('testFailed', inputs=in_desc, output=name,
                                 expected=expected, actual=actual)
