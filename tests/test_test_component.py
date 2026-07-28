@@ -8,7 +8,7 @@ success it emits a 'test' pass event and returns.
 
 import pytest
 
-from ggl import arithmetic, callbacks, circuit, io, logic, memory
+from ggl import arithmetic, callbacks, circuit, io, logic, memory, plexers
 from ggl.errors import CircuitError
 
 
@@ -238,3 +238,63 @@ def test_clocked_without_a_clock_fails():
     with pytest.raises(CircuitError) as ei:
         t.evaluate(c)
     assert ei.value.error_code == "testNoClock"
+
+
+# --- Reset pulse (initialize a sequential circuit before running) -----------
+
+def make_loadable_counter():
+    """Counter that loads input 'B' into its register when 'CLR' is pulsed high,
+    else counts up — mirrors the user's instruction-counter (mux-select load).
+    A plain Register powers up at 0, so a wrong/absent reset is detectable."""
+    c = circuit.Circuit()
+    clk = io.Clock(label="CLK")
+    clr = io.Input(label="CLR", bits=1); clr.value = 0
+    b = io.Input(label="B", bits=8); b.value = 0
+    reg = memory.Register(label="REG", bits=8)
+    adder = arithmetic.Adder(label="+", bits=8)
+    mux = plexers.Multiplexer(selector_bits=1, bits=8)
+    en = io.Constant(bits=1); en.value = 1
+    inc = io.Constant(bits=8); inc.value = 1
+    cin = io.Constant(bits=1); cin.value = 0
+    c.connect(clk, reg.input("CLK"))
+    c.connect(en, reg.input("en"))
+    c.connect(inc, adder.input("a"))
+    c.connect(cin, adder.input("cin"))
+    c.connect(reg.output("Q"), adder.input("b"))       # sum = Q + 1
+    c.connect(clr, mux.input("sel"))
+    c.connect(adder.output("sum"), mux.input("0"))     # CLR=0 -> load Q+1 (count)
+    c.connect(b, mux.input("1"))                       # CLR=1 -> load B (reset)
+    c.connect(mux, reg.input("D"))
+    c.connect(reg.output("Q"), io.Output(label="count", bits=8, js_id="count"))
+    return c
+
+
+def test_reset_pulse_loads_known_state():
+    # Pulsing CLR high for one cycle must load B into the register (== 7 here);
+    # without the reset the register would still read its power-up 0.
+    c = make_loadable_counter()
+    t = io.Test(label="reset", js_id="t1",
+                input_names=["B"], output_names=["count"], rows=[[7, 7]],
+                reset_enabled=True, reset_input_name="CLR")
+    assert t.evaluate(c)["passed"] is True
+
+
+def test_reset_then_run_until_stop():
+    c = make_loadable_counter()
+    # Load B=100, then count until 'count' reaches 103; expect 103.
+    t = io.Test(label="run", js_id="t1",
+                input_names=["B"], output_names=["count"], rows=[[100, 103]],
+                reset_enabled=True, reset_input_name="CLR",
+                stop_enabled=True, stop_output_name="count", stop_output_value=103)
+    assert t.evaluate(c)["passed"] is True
+
+
+def test_reset_input_not_found():
+    c = make_loadable_counter()
+    t = io.Test(label="x", js_id="t1",
+                input_names=["B"], output_names=["count"], rows=[[0, 0]],
+                reset_enabled=True, reset_input_name="NOPE")
+    with pytest.raises(CircuitError) as ei:
+        t.evaluate(c)
+    assert ei.value.error_code == "testInputNotFound"
+    assert ei.value.to_dict()["name"] == "NOPE"

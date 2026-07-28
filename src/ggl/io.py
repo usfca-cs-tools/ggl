@@ -233,7 +233,9 @@ class Test(Node):
 
     def __init__(self, label='', js_id='', input_names=None, output_names=None,
                  rows=None, stop_enabled=False, stop_output_name='',
-                 stop_output_value=1, max_cycles=10000):
+                 stop_output_value=1, max_cycles=10000,
+                 reset_enabled=False, reset_input_name='', reset_value=1,
+                 reset_cycles=1):
         # list(... or []) copies and avoids the shared-mutable-default footgun.
         self.input_names = list(input_names or [])
         self.output_names = list(output_names or [])
@@ -245,6 +247,13 @@ class Test(Node):
         self.stop_output_name = stop_output_name or ''
         self.stop_output_value = stop_output_value
         self.max_cycles = max_cycles
+        # Reset pulse: before each run, drive a named input to reset_value for
+        # reset_cycles clock cycles, then to 0 — so a sequential circuit starts
+        # from a known state. reset_value/reset_cycles are defaults, not UI.
+        self.reset_enabled = bool(reset_enabled)
+        self.reset_input_name = reset_input_name or ''
+        self.reset_value = reset_value
+        self.reset_cycles = reset_cycles
         super().__init__(kind=Test.kind, js_id=js_id, label=label)
 
     def _resolve(self, nodes, name, not_found_code):
@@ -289,13 +298,18 @@ class Test(Node):
         out_nodes = [self._resolve(circuit.outputs, n, 'testOutputNotFound')
                      for n in self.output_names]
 
-        # Clocked mode needs a clock and a valid stop output.
+        # Clocked features (stop condition and/or a reset pulse) need a clock.
         stop_node = None
-        if self.stop_enabled:
+        reset_node = None
+        if self.stop_enabled or self.reset_enabled:
             if circuit.clock is None:
                 self._raise('testNoClock')
+        if self.stop_enabled:
             stop_node = self._resolve(
                 circuit.outputs, self.stop_output_name, 'testOutputNotFound')
+        if self.reset_enabled:
+            reset_node = self._resolve(
+                circuit.inputs, self.reset_input_name, 'testInputNotFound')
 
         n_in = len(self.input_names)
         width = n_in + len(self.output_names)
@@ -328,6 +342,15 @@ class Test(Node):
             in_vals, out_vals = row[:n_in], row[n_in:]
             drive(zip(in_nodes, in_vals))
             circuit.run()
+
+            # Reset pulse: assert the reset input, clock it in, then deassert —
+            # so a sequential circuit starts from a known state before the run.
+            if self.reset_enabled:
+                drive([(reset_node, self.reset_value)])
+                for _ in range(self.reset_cycles):
+                    circuit.cycle()
+                drive([(reset_node, 0)])
+                circuit.run()
 
             # Clocked: pulse the clock until the stop output reaches its value
             # (or give up), then sample the outputs at that point.
