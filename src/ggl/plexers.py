@@ -58,6 +58,8 @@ class Decoder(Plexer):
         super().__init__(
             Decoder.kind,
             js_id=js_id,
+            num_inputs=0,  # a Decoder has only 'sel'; the Plexer default of 2 data
+                           # inputs was vestigial (never read) — preflight caught it
             num_outputs=2**selector_bits,
             label=label,
             bits=1)  # Decoder outputs are 1-bit

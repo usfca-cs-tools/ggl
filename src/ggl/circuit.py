@@ -114,6 +114,15 @@ class Circuit:
         finally:
             callbacks.flush_batch()
 
+    def preflight(self):
+        """Ask every registered node whether it's ready to simulate (all input
+        ports connected), before settling. Runs once per run(), not per settle().
+        Only nodes the circuit knows about — i.e. connected via connect() — are
+        checked; a fully-orphaned component isn't in all_nodes (the codegen would
+        need to register it for that to be caught here)."""
+        for node in self.all_nodes:
+            node.preflight()
+
     def run(self):
         """
         Settle the circuit's combinational logic synchronously and return.
@@ -122,6 +131,7 @@ class Circuit:
         for the browser lives in run_async().
         """
         self.running = True
+        self.preflight()
         self.settle()
 
     def cycle(self):
@@ -190,6 +200,7 @@ class Circuit:
         changes settle immediately in update_input().
         """
         self.running = True
+        self.preflight()
         self.settle()
         while self.running:
             if self.clock is not None and self.clock.frequency:

@@ -168,6 +168,22 @@ class Node:
     def append_output_edge(self, name, edge):
         self.outputs.append_edge(name, edge)
 
+    def preflight(self):
+        """Verify this node is ready to simulate, before a run begins. Base check:
+        every input port must be connected. Subclasses override for special needs
+        (e.g. a genuinely optional input). Raises CircuitError(inputNotConnected) —
+        the same error reading an unconnected input raises — so an open input
+        surfaces through the one structured-error path whether it's caught here or
+        during propagation."""
+        for name in self.inputs.get_names():
+            if self.inputs.get_edge(name) is None:
+                raise CircuitError(
+                    component_id=self.js_id,
+                    component_type=self.error_kind,
+                    component_label=self.label,
+                    error_code="inputNotConnected",
+                    port_name=name)
+
     def input(self, name):
         """Returns a Connector for the named input"""
         return Connector(self, name)
