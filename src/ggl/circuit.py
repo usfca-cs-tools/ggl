@@ -114,12 +114,24 @@ class Circuit:
         finally:
             callbacks.flush_batch()
 
+    def add_orphan(self, node):
+        """Declare a node the circuit isn't wired to, so preflight still checks it.
+
+        connect() already registers every node it touches; a component wired to
+        nothing never reaches connect() and so is invisible to the engine. The
+        codegen emits add_orphan() for exactly those, so a wired-to-nothing
+        component (e.g. an Output whose only wire was dropped) surfaces its open
+        input instead of vanishing. Named for the reader: a lone add_orphan() line
+        in generated GGL is itself the smell."""
+        if node not in self.all_nodes:
+            self.all_nodes.append(node)
+
     def preflight(self):
         """Ask every registered node whether it's ready to simulate (all input
         ports connected), before settling. Runs once per run(), not per settle().
-        Only nodes the circuit knows about — i.e. connected via connect() — are
-        checked; a fully-orphaned component isn't in all_nodes (the codegen would
-        need to register it for that to be caught here)."""
+        Nodes reach all_nodes either by connect() (wired) or add_orphan() (the
+        codegen's declared-but-unconnected components), so both a half-wired
+        component and a fully-orphaned one are checked here."""
         for node in self.all_nodes:
             node.preflight()
 

@@ -37,6 +37,33 @@ def test_fully_connected_circuit_preflights_clean():
     assert y.value == 1
 
 
+def test_orphaned_output_is_flagged_via_add_orphan():
+    # An Output wired to nothing never reaches connect(), so the codegen declares
+    # it with add_orphan(); preflight must then flag its open input.
+    c = circuit.Circuit()
+    a = io.Input(bits=1, label="A"); a.value = 1
+    g = logic.Not()
+    c.connect(a, g.input("0"))
+    c.connect(g, io.Output(bits=1, label="Y", js_id="y"))
+    orphan = io.Output(bits=1, label="IW", js_id="iw")   # dropped wire: no connect()
+    c.add_orphan(orphan)
+    with pytest.raises(CircuitError) as ei:
+        c.run()
+    d = ei.value.to_dict()
+    assert d["error_code"] == "inputNotConnected"
+    assert d["component_label"] == "IW"
+
+
+def test_orphaned_input_source_preflights_clean():
+    # An unconnected Input is a source that reads nothing — legitimately unused,
+    # so add_orphan()'ing it must NOT raise (no input ports to be open).
+    c = circuit.Circuit()
+    a = io.Input(bits=1, label="A"); a.value = 1
+    c.connect(a, io.Output(bits=1, label="Y", js_id="y"))
+    c.add_orphan(io.Input(bits=1, label="UNUSED", js_id="u"))
+    c.run()   # must not raise
+
+
 def test_decoder_has_no_phantom_data_inputs():
     # Regression: a Decoder used to inherit 2 unused data inputs from Plexer;
     # only 'sel' is required, so preflight must pass with just 'sel' connected.
