@@ -334,7 +334,15 @@ class Test(Node):
             drive(saved_inputs)
             circuit.run()
 
-        for i, row in enumerate(self.rows, start=1):
+        # A clocked run (reset and/or stop) with no expected-output rows is still
+        # a valid "reset, then run until the stop condition" — execute one implicit
+        # scenario instead of skipping everything. (Combinational tests with no
+        # rows correctly do nothing.)
+        rows = self.rows
+        if not rows and (self.stop_enabled or self.reset_enabled):
+            rows = [[]]
+
+        for i, row in enumerate(rows, start=1):
             if len(row) != width:
                 restore()
                 self._raise('testRowWidth', row=i, actual=len(row),

@@ -289,6 +289,18 @@ def test_reset_then_run_until_stop():
     assert t.evaluate(c)["passed"] is True
 
 
+def test_clocked_run_with_no_rows_still_runs():
+    # No columns and no rows: just reset + run until 'count' reaches 5. The
+    # clocked run must still execute (one implicit scenario), not no-op.
+    c = make_loadable_counter()
+    t = io.Test(label="run", js_id="t1",
+                input_names=[], output_names=[], rows=[],
+                reset_enabled=True, reset_input_name="CLR",
+                stop_enabled=True, stop_output_name="count", stop_output_value=5)
+    # Reset loads B (0), then count 0->5; passes with nothing to assert.
+    assert t.evaluate(c)["passed"] is True
+
+
 def test_reset_input_not_found():
     c = make_loadable_counter()
     t = io.Test(label="x", js_id="t1",
