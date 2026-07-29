@@ -6,7 +6,25 @@ the circuit computes the right answer). The behavioral check is the real proof t
 generated program is both syntactically valid and semantically correct.
 """
 
+import json
+import os
+
+import pytest
+
 from ggl import view
+
+FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "ggc")
+
+
+def _load(name):
+    with open(os.path.join(FIXTURE_DIR, name)) as f:
+        return json.load(f)
+
+
+def _set_input(ggc, label, value):
+    for c in ggc["components"]:
+        if c.get("type") == "input" and (c.get("props") or {}).get("label") == label:
+            c.setdefault("props", {})["value"] = value
 
 
 def _and_ggc(a, b):
@@ -70,6 +88,21 @@ def test_and_true():
 def test_and_false():
     ns = _run(view.generate(_and_ggc(1, 0)))
     assert _output(ns, "Y").value == 0
+
+
+@pytest.mark.parametrize("a,b", [(0, 0), (5, 3), (1, 1), (15, 1), (9, 9), (15, 15)])
+def test_adder_4_bit_hierarchical(a, b):
+    # Real app-saved v1.4 fixture: a 4-bit adder built from four adder_1_bit subcircuits
+    # (schematic-components) + splitters/merger/constant. Exercises hierarchy, the
+    # schematic port->inner-label mapping, wires emitters, and non-integer gate ports.
+    ggc = _load("adder_4_bit.ggc")
+    _set_input(ggc, "A", a)
+    _set_input(ggc, "B", b)
+    ns = _run(view.generate(ggc))
+    circ = ns["circuit0"]
+    total = a + b
+    assert _output(ns, "SUM").value == (total & 0xF)
+    assert _output(ns, "COUT").value == (total >> 4)
 
 
 def test_unresolved_wire_is_skipped_not_crashed():
