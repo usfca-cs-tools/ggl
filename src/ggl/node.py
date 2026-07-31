@@ -230,23 +230,40 @@ class Node:
 
     def clone(self, instance_id):
         """
-        Create a deep copy of this node with a new instance ID.
-        Uses deepcopy to preserve all state, then updates label and clears connections.
+        Create a deep copy of this node with a new instance ID, with its connections
+        cleared (the caller rewires the clone).
+
+        The copy must preserve the node's OWN state (bits, ROM contents, port structure,
+        js_id so exceptions reference the original UI component) but NOT its edges: an
+        edge references the nodes it connects, so deep-copying a node while its edges are
+        attached makes deepcopy walk the entire connected graph. For a large, deeply
+        nested circuit that recursion exceeds Python's limit and is quadratic besides. So
+        we detach this node's edges first, deepcopy only its own state, then restore the
+        originals — the clone comes out already disconnected.
         """
+        saved_inputs = dict(self.inputs.points)
+        saved_outputs = dict(self.outputs.points)
+        # `.circuit` (on Input/Clock and cloned nodes) points back at the whole Circuit,
+        # another route by which deepcopy would walk the entire graph. The clone gets its
+        # circuit reassigned by _clone_circuit, so drop it here too.
+        had_circuit = 'circuit' in self.__dict__
+        saved_circuit = self.__dict__.get('circuit')
+        for name in self.inputs.points:
+            self.inputs.points[name] = None
+        for name in self.outputs.points:
+            self.outputs.points[name] = []
+        if had_circuit:
+            self.__dict__['circuit'] = None
+        try:
+            node = copy.deepcopy(self)
+        finally:
+            self.inputs.points.update(saved_inputs)
+            self.outputs.points.update(saved_outputs)
+            if had_circuit:
+                self.__dict__['circuit'] = saved_circuit
 
-        # Create a deep copy to preserve all configuration and state
-        # Preserve js_id so Exceptions can reference the original UI component
-        node = copy.deepcopy(self)
-
-        # Update the label with instance_id suffix
         if hasattr(node, 'label') and node.label:
             node.label = f"{node.label}_{instance_id}"
-
-        # Reinitialize connections - preserve structure but clear edge references
-        for oname in node.outputs.points:
-            node.outputs.points[oname] = []
-        for input_name in node.inputs.points:
-            node.inputs.points[input_name] = None
 
         return node
 

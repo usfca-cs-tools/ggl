@@ -68,6 +68,9 @@ def _component_expr(comp):
     if t == "constant":
         return (f'io.Constant(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")',
                 int(p.get("value", 0) or 0))
+    if t == "clock":
+        return (f'io.Clock(label="{_esc(label)}", frequency={p.get("frequency", 1)}, '
+                f'mode="{_esc(p.get("mode", "manual"))}", js_id="{_esc(js_id)}")', None)
     if t == "output":
         return (f'io.Output(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
     if t in _GATE_CLASS:
@@ -189,7 +192,78 @@ def _match(index, pos, direction):
     return hits[0] if len(hits) == 1 else None
 
 
-def _emit_body(components, wires, circ_var, subdefs, templates, lines, is_top):
+def _endpoints(wire):
+    s, e = wire.get("startConnection", {}).get("pos", {}), wire.get("endConnection", {}).get("pos", {})
+    return (_r(s.get("x")), _r(s.get("y"))), (_r(e.get("x")), _r(e.get("y")))
+
+
+def _resolve_connections(wires, junctions, index):
+    """Group wires into electrical nets and return (src, dst, wire_id) connections.
+
+    A net is a maximal set of wires joined either by a shared endpoint coordinate or by
+    a junction (a branch wire meeting another wire mid-run). Each net's ports are found
+    by matching every endpoint against the port index; the net's one output drives each
+    of its inputs. This subsumes both fan-out styles: multiple wires off one output port,
+    and junction branches off a trunk wire.
+    """
+    from collections import defaultdict
+
+    n = len(wires)
+    parent = list(range(n))
+
+    def find(i):
+        root = i
+        while parent[root] != root:
+            root = parent[root]
+        while parent[i] != root:
+            parent[i], i = root, parent[i]
+        return root
+
+    def union(a, b):
+        parent[find(a)] = find(b)
+
+    coord_wires = defaultdict(list)
+    for i, wire in enumerate(wires):
+        for key in _endpoints(wire):
+            coord_wires[key].append(i)
+    for group in coord_wires.values():
+        for j in group[1:]:
+            union(group[0], j)
+
+    id_to_i = {wire.get("id"): i for i, wire in enumerate(wires)}
+    for jn in junctions or []:
+        si, ci = jn.get("sourceWireIndex"), id_to_i.get(jn.get("connectedWireId"))
+        if isinstance(si, int) and 0 <= si < n and ci is not None:
+            union(si, ci)
+
+    nets = defaultdict(list)
+    for i in range(n):
+        nets[find(i)].append(i)
+
+    conns = []
+    for net in nets.values():
+        outs, ins, input_wire = [], [], {}
+        for i in net:
+            for key in _endpoints(wires[i]):
+                for (var, name, direction) in index.get(key, []):
+                    port = (var, name)
+                    if direction == "output":
+                        if port not in outs:
+                            outs.append(port)
+                    else:
+                        if port not in ins:
+                            ins.append(port)
+                        input_wire.setdefault(port, wires[i].get("id", ""))
+        if outs and ins:
+            src = outs[0]
+            for dst in ins:
+                conns.append((src, dst, input_wire.get(dst, "")))
+    # Stable output order regardless of union-find internals.
+    conns.sort(key=lambda c: (c[0], c[1]))
+    return conns
+
+
+def _emit_body(components, wires, junctions, circ_var, subdefs, templates, lines, is_top):
     """Emit node declarations and connect() calls for one circuit (top level or a
     subcircuit body) into ``circ_var``."""
     var_of = {}
@@ -218,19 +292,10 @@ def _emit_body(components, wires, circ_var, subdefs, templates, lines, is_top):
     lines.extend(value_inits)
 
     index = _port_index(components, var_of, subdefs)
-    seen = set()
-    for wire in wires:
-        src = _match(index, wire.get("startConnection", {}).get("pos", {}), "output")
-        dst = _match(index, wire.get("endConnection", {}).get("pos", {}), "input")
-        if not (src and dst):
-            continue
-        if (src, dst) in seen:
-            continue
-        seen.add((src, dst))
-        (svar, sname), (dvar, dname) = src, dst
+    for (svar, sname), (dvar, dname), js in _resolve_connections(wires, junctions, index):
         lines.append(
             f'{circ_var}.connect({svar}.output("{sname}"), '
-            f'{dvar}.input("{dname}"), js_id="{_esc(wire.get("id", ""))}")'
+            f'{dvar}.input("{dname}"), js_id="{_esc(js)}")'
         )
 
 
@@ -262,6 +327,7 @@ def generate(ggc, run_call="circuit0.run()"):
         lines.append(f"# subcircuit: {subdefs[circuit_id].get('definition', {}).get('name', circuit_id)}")
         lines.append(f"{cvar} = circuit.Circuit()")
         _emit_body(inner.get("components", []) or [], inner.get("wires", []) or [],
+                   inner.get("wireJunctions", []) or [],
                    cvar, subdefs, templates, lines, is_top=False)
         tvar = f"Tmpl_{_san(circuit_id)}"
         lines.append(f"{tvar} = circuit.Component({cvar})")
@@ -275,6 +341,7 @@ def generate(ggc, run_call="circuit0.run()"):
     lines.append("")
     lines.append("circuit0 = circuit.Circuit()")
     _emit_body(ggc.get("components", []) or [], ggc.get("wires", []) or [],
+               ggc.get("wireJunctions", []) or [],
                "circuit0", subdefs, templates, lines, is_top=True)
     lines.append(run_call)
     return "\n".join(lines) + "\n"

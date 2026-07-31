@@ -105,6 +105,34 @@ def test_adder_4_bit_hierarchical(a, b):
     assert _output(ns, "COUT").value == (total >> 4)
 
 
+def test_counter_4_bit_counts_when_clocked():
+    # Real app-saved v1.4 fixture: a 4-bit counter nesting register -> D flip-flop ->
+    # D-latch -> SR-latch (feedback), with junctions for fan-out and an internal constant.
+    # Exercises the whole sequential hierarchical path: it must reset on CLR and then
+    # increment on each clock edge.
+    ggc = _load("counter_4_bit.ggc")
+    ns = _run(view.generate(ggc, run_call="circuit0.run()"))
+    circ = ns["circuit0"]
+
+    def set_input(label, value):
+        for n in circ.inputs:
+            if n.label == label:
+                n.value = value
+
+    count = _output(ns, "COUNT")
+    set_input("CLR", 1)
+    circ.cycle()
+    assert count.value == 0  # asynchronous clear
+
+    set_input("CLR", 0)
+    set_input("EN", 1)
+    seq = []
+    for _ in range(6):
+        circ.cycle()
+        seq.append(count.value)
+    assert seq == [1, 2, 3, 4, 5, 6]
+
+
 @pytest.mark.parametrize("comp,expected_kind", [
     ({"type": "adder", "props": {"label": "+", "bits": 8}}, "Adder"),
     ({"type": "subtract", "props": {"label": "-", "bits": 8}}, "Subtract"),
