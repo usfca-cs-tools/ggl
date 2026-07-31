@@ -293,7 +293,10 @@ class Circuit:
         # an ordinary signal as far as propagation is concerned.
         if srcnode.kind in (Input.kind, Clock.kind) and srcnode not in self.inputs:
             self.inputs.append(srcnode)
-            srcnode.circuit = self
+            # Only an Input's value setter re-propagates through this back-reference;
+            # a Clock is driven by the circuit and never reads it, so it doesn't get one.
+            if srcnode.kind == Input.kind:
+                srcnode.circuit = self
         if destnode.kind == Output.kind and destnode not in self.outputs:
             self.outputs.append(destnode)
 

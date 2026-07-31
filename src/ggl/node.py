@@ -228,43 +228,37 @@ class Node:
             f"{self.kind} '{self.label}' output '{output_name}' propagates {hex(value)}")
         return self.outputs.write_value(output_name, value, bits)
 
+    def __deepcopy__(self, memo):
+        """Deep-copy this node's OWN state only, never its edges.
+
+        An edge references the nodes it joins and a node's `.circuit` points back at the
+        whole Circuit, so a naive deepcopy walks the entire connected graph — O(graph) per
+        node and deep enough on large nested circuits to overflow the recursion limit.
+        Instead we copy the intrinsic attributes (bits, ROM/register contents, js_id, …)
+        and give the copy fresh, empty port structures + no circuit back-reference, so the
+        clone is disconnected by construction. Because EVERY node deep-copies this way, a
+        reference that does survive (a ChildInput's `parent_edge`) can only reach adjacent
+        nodes, which in turn drop their own edges — the traversal can't run away.
+        """
+        new = self.__class__.__new__(self.__class__)
+        memo[id(self)] = new
+        for key, value in self.__dict__.items():
+            if key == "inputs":
+                new.inputs = NodeInputs(list(value.points.keys()), new)
+            elif key == "outputs":
+                new.outputs = NodeOutputs(list(value.points.keys()), new)
+            elif key == "circuit":
+                new.circuit = None  # back-reference; the caller reassigns it
+            else:
+                new.__dict__[key] = copy.deepcopy(value, memo)
+        return new
+
     def clone(self, instance_id):
-        """
-        Create a deep copy of this node with a new instance ID, with its connections
-        cleared (the caller rewires the clone).
-
-        The copy must preserve the node's OWN state (bits, ROM contents, port structure,
-        js_id so exceptions reference the original UI component) but NOT its edges: an
-        edge references the nodes it connects, so deep-copying a node while its edges are
-        attached makes deepcopy walk the entire connected graph. For a large, deeply
-        nested circuit that recursion exceeds Python's limit and is quadratic besides. So
-        we detach this node's edges first, deepcopy only its own state, then restore the
-        originals — the clone comes out already disconnected.
-        """
-        saved_inputs = dict(self.inputs.points)
-        saved_outputs = dict(self.outputs.points)
-        # `.circuit` (on Input/Clock and cloned nodes) points back at the whole Circuit,
-        # another route by which deepcopy would walk the entire graph. The clone gets its
-        # circuit reassigned by _clone_circuit, so drop it here too.
-        had_circuit = 'circuit' in self.__dict__
-        saved_circuit = self.__dict__.get('circuit')
-        for name in self.inputs.points:
-            self.inputs.points[name] = None
-        for name in self.outputs.points:
-            self.outputs.points[name] = []
-        if had_circuit:
-            self.__dict__['circuit'] = None
-        try:
-            node = copy.deepcopy(self)
-        finally:
-            self.inputs.points.update(saved_inputs)
-            self.outputs.points.update(saved_outputs)
-            if had_circuit:
-                self.__dict__['circuit'] = saved_circuit
-
-        if hasattr(node, 'label') and node.label:
+        """Create a disconnected copy of this node with an instance-suffixed label.
+        Connections are cleared by __deepcopy__; the caller rewires the clone."""
+        node = copy.deepcopy(self)
+        if getattr(node, "label", None):
             node.label = f"{node.label}_{instance_id}"
-
         return node
 
 
