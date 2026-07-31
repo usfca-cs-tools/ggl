@@ -89,6 +89,59 @@ def _component_expr(comp):
         merges = [(rg.get("start"), rg.get("end")) for rg in (p.get("ranges") or [])]
         return (f'wires.Merger(label="{_esc(label)}", bits={p.get("outputBits", 1)}, '
                 f'merge_inputs={merges}, js_id="{_esc(js_id)}")', None)
+    if t == "tunnel":
+        # Same-labelled tunnels are joined inside the engine; we just emit the node.
+        return (f'wires.Tunnel(label="{_esc(label)}", bits={bits}, '
+                f'direction="{_esc(p.get("direction", "input"))}", js_id="{_esc(js_id)}")', None)
+
+    # --- arithmetic ---
+    if t == "adder":
+        return (f'arithmetic.Adder(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
+    if t == "subtract":
+        return (f'arithmetic.Subtract(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
+    if t == "multiply":
+        return (f'arithmetic.Multiply(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
+    if t == "divide":
+        # The ggl class is Division (the TS generator emitted a nonexistent 'Divide').
+        return (f'arithmetic.Division(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
+    if t == "compare":
+        return (f'arithmetic.Comparator(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
+    if t == "shift":
+        # BarrelShifter wants direction + mode separately; the .ggc packs them into one
+        # field like "logical_left" / "arithmetic_right".
+        m = str(p.get("mode", "logical_left"))
+        direction = "right" if "right" in m else "left"
+        shift_mode = "arithmetic" if "arithmetic" in m else "logical"
+        return (f'arithmetic.BarrelShifter(label="{_esc(label)}", bits={bits}, '
+                f'direction="{direction}", mode="{shift_mode}", js_id="{_esc(js_id)}")', None)
+
+    # --- plexers ---
+    if t == "multiplexer":
+        args = [f'label="{_esc(label)}"', f'selector_bits={int(p.get("selectorBits", 2))}']
+        if bits != 1:
+            args.append(f"bits={bits}")
+        args.append(f'js_id="{_esc(js_id)}"')
+        return (f'plexers.Multiplexer({", ".join(args)})', None)
+    if t == "decoder":
+        return (f'plexers.Decoder(label="{_esc(label)}", '
+                f'selector_bits={int(p.get("selectorBits", 2))}, js_id="{_esc(js_id)}")', None)
+    if t == "priorityEncoder":
+        return (f'plexers.PriorityEncoder(label="{_esc(label)}", '
+                f'selector_bits={int(p.get("selectorBits", 2))}, js_id="{_esc(js_id)}")', None)
+
+    # --- memory ---
+    if t == "register":
+        return (f'memory.Register(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
+    if t == "rom":
+        ab, db = int(p.get("addressBits", 4)), int(p.get("dataBits", 8))
+        maxv, src = (1 << db) - 1, (p.get("data") or [])
+        data = [max(0, min(int(src[i]), maxv)) if i < len(src) else 0 for i in range(1 << ab)]
+        return (f'memory.ROM(label="{_esc(label)}", address_bits={ab}, data_bits={db}, '
+                f'data={data}, js_id="{_esc(js_id)}")', None)
+    if t == "ram":
+        ab, db = int(p.get("addressBits", 4)), int(p.get("dataBits", 8))
+        return (f'memory.RAM(label="{_esc(label)}", address_bits={ab}, data_bits={db}, '
+                f'js_id="{_esc(js_id)}")', None)
 
     return (None, None)
 

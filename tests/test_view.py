@@ -105,6 +105,45 @@ def test_adder_4_bit_hierarchical(a, b):
     assert _output(ns, "COUT").value == (total >> 4)
 
 
+@pytest.mark.parametrize("comp,expected_kind", [
+    ({"type": "adder", "props": {"label": "+", "bits": 8}}, "Adder"),
+    ({"type": "subtract", "props": {"label": "-", "bits": 8}}, "Subtract"),
+    ({"type": "multiply", "props": {"label": "x", "bits": 8}}, "Multiply"),
+    ({"type": "divide", "props": {"label": "/", "bits": 8}}, "Division"),
+    ({"type": "compare", "props": {"label": "=", "bits": 8}}, "Comparator"),
+    ({"type": "shift", "props": {"label": "<<", "bits": 8, "mode": "arithmetic_right"}}, "BarrelShifter"),
+    ({"type": "multiplexer", "props": {"label": "M", "selectorBits": 2, "bits": 4}}, "Multiplexer"),
+    ({"type": "decoder", "props": {"label": "D", "selectorBits": 3}}, "Decoder"),
+    ({"type": "priorityEncoder", "props": {"label": "PE", "selectorBits": 2}}, "PriorityEncoder"),
+    ({"type": "register", "props": {"label": "R", "bits": 8}}, "Register"),
+    ({"type": "rom", "props": {"label": "ROM", "addressBits": 3, "dataBits": 8, "data": [1, 2, 3]}}, "ROM"),
+    ({"type": "ram", "props": {"label": "RAM", "addressBits": 4, "dataBits": 8}}, "RAM"),
+    ({"type": "tunnel", "props": {"label": "T", "bits": 4, "direction": "output"}}, "Tunnel"),
+])
+def test_leaf_emitter_constructs_a_valid_ggl_node(comp, expected_kind):
+    # The emitted construction line must actually build the right ggl node — this is
+    # what would fail on a bad class name (arithmetic.Divide) or wrong kwargs (Shift).
+    expr, _ = view._component_expr({"id": "x", **comp})
+    from ggl import arithmetic, circuit, io, logic, memory, plexers, wires
+    ns = {"arithmetic": arithmetic, "circuit": circuit, "io": io, "logic": logic,
+          "memory": memory, "plexers": plexers, "wires": wires}
+    exec(f"n = {expr}", ns)  # noqa: S102 - our own generated line
+    assert ns["n"].kind == expected_kind
+
+
+def test_shift_maps_packed_mode_to_direction_and_mode():
+    expr, _ = view._component_expr(
+        {"id": "s", "type": "shift", "props": {"label": "s", "bits": 4, "mode": "arithmetic_right"}})
+    assert 'direction="right"' in expr and 'mode="arithmetic"' in expr
+
+
+def test_rom_pads_and_clamps_data_to_address_space():
+    expr, _ = view._component_expr(
+        {"id": "r", "type": "rom", "props": {"addressBits": 2, "dataBits": 2, "data": [1, 9, 3]}})
+    # 2 address bits -> 4 cells; values clamped to 2-bit max (3); missing cells zero.
+    assert "data=[1, 3, 3, 0]" in expr
+
+
 def test_unresolved_wire_is_skipped_not_crashed():
     # A wire whose endpoint hits no port must be dropped, not raise.
     ggc = _and_ggc(1, 1)
