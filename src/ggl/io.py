@@ -171,13 +171,18 @@ class ChildOutput(Output):
 
 class Constant(Input):
     """
-    Constant is an IONode for constant values in a circuit, e.g. c0001093
-    Maybe it's odd to make it an alias for Input, but for simulation
-    purposes, it seems to behave like an input
+    Constant is a fixed-value source. For a circuit's own simulation it behaves exactly
+    like an Input (it seeds propagation with its value), so it reuses Input's machinery —
+    but it has its own kind because it is NOT an external interface port: its value is set
+    once at construction, so a parent circuit can't drive it, and a subcircuit must not
+    expose it as a port (see component.CircuitNode).
     """
+
+    kind = 'Constant'
 
     def __init__(self, js_id='', label='', bits=1):
         super().__init__(js_id=js_id, label=label, bits=bits)
+        self.kind = Constant.kind  # Input.__init__ set it to 'Input'; override
 
 
 class Clock(IONode):

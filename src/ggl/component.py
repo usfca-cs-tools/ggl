@@ -27,11 +27,8 @@ class CircuitNode(Node):
         # interface inputs are its Input nodes only — a Constant or Clock is a self-driven
         # internal source (it lands in circuit.inputs for seeding, but must NOT become an
         # external port, or it would look like an unconnected input on the CircuitNode).
-        from .io import Constant, Clock
-        interface_inputs = [
-            inp for inp in template.inputs
-            if not isinstance(inp, Constant) and inp.kind != Clock.kind
-        ]
+        from .io import Input
+        interface_inputs = [inp for inp in template.inputs if inp.kind == Input.kind]
         input_names = [inp.label for inp in interface_inputs]
         output_names = [out.label for out in template.outputs]
 
