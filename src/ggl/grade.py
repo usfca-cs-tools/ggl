@@ -41,6 +41,21 @@ def inject_test(ggc, test_props):
     return {**ggc, "components": components}
 
 
+def clock_without_reset(ggc):
+    """Return the labels of Tests that grade a clocked circuit (has a Clock) without a
+    reset pulse. Such a test cycles the clock from the circuit's power-on state, which for
+    a Register is randomized — so the result can differ between runs, breaking the
+    student/instructor "same result" guarantee. The fix is a reset (reset_enabled)."""
+    components = ggc.get("components", []) or []
+    if not any(c.get("type") == "clock" for c in components):
+        return []
+    labels = []
+    for c in components:
+        if c.get("type") == "test" and not (c.get("props", {}) or {}).get("reset_enabled"):
+            labels.append((c.get("props", {}) or {}).get("label") or "test")
+    return labels
+
+
 def grade(ggc):
     """Grade a .ggc dict. Returns (ok: bool, message: str).
 
@@ -89,6 +104,13 @@ def main(argv=None):
     if args.test:
         with open(args.test) as f:
             ggc = inject_test(ggc, json.load(f))
+
+    # Diagnostic to stderr (kept off stdout so it never affects the graded result): a
+    # clocked test with no reset can be non-deterministic, so warn the author.
+    for label in clock_without_reset(ggc):
+        print(f"warning: Test '{label}' cycles a clocked circuit with no reset pulse; "
+              f"its result can depend on the power-on state — add reset_enabled",
+              file=sys.stderr)
 
     ok, message = grade(ggc)
     print(message)

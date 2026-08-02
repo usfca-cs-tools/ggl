@@ -46,6 +46,32 @@ def test_inject_drops_a_student_supplied_test():
     assert grade.grade(ggc)[0] is True
 
 
+def _no_reset_props(stop_value, expected):
+    props = _counter_test_props(stop_value, expected)
+    props.pop("reset_enabled")
+    props.pop("reset_input_name")
+    props["label"] = "noreset"
+    return props
+
+
+def test_clock_without_reset_is_flagged():
+    with_reset = grade.inject_test(_counter(), _counter_test_props(5, 5))
+    assert grade.clock_without_reset(with_reset) == []
+    without_reset = grade.inject_test(_counter(), _no_reset_props(5, 5))
+    assert grade.clock_without_reset(without_reset) == ["noreset"]
+
+
+def test_cli_warning_goes_to_stderr_not_stdout(tmp_path, capsys):
+    circuit = tmp_path / "student.ggc"
+    circuit.write_text(json.dumps(_counter()))
+    spec = tmp_path / "t.json"
+    spec.write_text(json.dumps(_no_reset_props(5, 5)))
+    grade.main([str(circuit), "--test", str(spec)])
+    out = capsys.readouterr()
+    assert "warning" in out.err.lower() and "reset" in out.err.lower()
+    assert "warning" not in out.out.lower()  # the graded stdout stays clean
+
+
 def test_grade_no_tests_is_not_a_pass():
     ok, msg = grade.grade(_counter())
     assert not ok and msg == "NO TESTS"
