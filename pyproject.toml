@@ -17,6 +17,12 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
 ]
 
+[project.scripts]
+# A PATH executable so grading works regardless of how the autograder is installed
+# (uv sync, uv tool install, ...): `uv tool install ggl` puts `ggl-grade` on PATH, and
+# the project TOML invokes it directly instead of a `python3 -m ggl.grade` subprocess.
+ggl-grade = "ggl.grade:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
