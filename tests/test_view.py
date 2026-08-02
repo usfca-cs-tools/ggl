@@ -204,6 +204,11 @@ def test_counter_4_bit_counts_when_clocked():
     ({"type": "rom", "props": {"label": "ROM", "addressBits": 3, "dataBits": 8, "data": [1, 2, 3]}}, "ROM"),
     ({"type": "ram", "props": {"label": "RAM", "addressBits": 4, "dataBits": 8}}, "RAM"),
     ({"type": "tunnel", "props": {"label": "T", "bits": 4, "direction": "output"}}, "Tunnel"),
+    ({"type": "constant", "props": {"label": "K", "bits": 4, "value": 5}}, "Constant"),
+    ({"type": "splitter", "props": {"label": "S", "inputBits": 4,
+      "ranges": [{"start": 0, "end": 1}, {"start": 2, "end": 3}]}}, "Splitter"),
+    ({"type": "merger", "props": {"label": "MG", "outputBits": 4,
+      "ranges": [{"start": 0, "end": 1}, {"start": 2, "end": 3}]}}, "Merger"),
 ])
 def test_leaf_emitter_constructs_a_valid_ggl_node(comp, expected_kind):
     # The emitted construction line must actually build the right ggl node — this is
@@ -227,6 +232,47 @@ def test_rom_pads_and_clamps_data_to_address_space():
         {"id": "r", "type": "rom", "props": {"addressBits": 2, "dataBits": 2, "data": [1, 9, 3]}})
     # 2 address bits -> 4 cells; values clamped to 2-bit max (3); missing cells zero.
     assert "data=[1, 3, 3, 0]" in expr
+
+
+def _decoder_ggc(sel):
+    """A 1-selector-bit decoder: input A -> decoder.sel, decoder.output("0") -> output Y.
+    Ports are named (sel / 0 / 1), so connectivity must resolve by *name*, not index."""
+    return {
+        "version": "1.4",
+        "components": [
+            {"id": "A", "type": "input", "x": 0, "y": 0,
+             "props": {"label": "A", "bits": 1, "value": sel},
+             "ports": [{"name": "0", "x": 1, "y": 0, "direction": "output"}]},
+            {"id": "D", "type": "decoder", "x": 5, "y": 0,
+             "props": {"label": "D", "selectorBits": 1},
+             "ports": [
+                 {"name": "sel", "x": 0, "y": 0, "direction": "input"},
+                 {"name": "0", "x": 2, "y": 0, "direction": "output"},
+                 {"name": "1", "x": 2, "y": 2, "direction": "output"},
+             ]},
+            {"id": "Y", "type": "output", "x": 10, "y": 0,
+             "props": {"label": "Y", "bits": 1},
+             "ports": [{"name": "0", "x": 0, "y": 0, "direction": "input"}]},
+        ],
+        "wires": [
+            {"id": "w1", "startConnection": {"pos": {"x": 1, "y": 0}, "portType": "output"},
+             "endConnection": {"pos": {"x": 5, "y": 0}, "portType": "input"}},
+            {"id": "w2", "startConnection": {"pos": {"x": 7, "y": 0}, "portType": "output"},
+             "endConnection": {"pos": {"x": 10, "y": 0}, "portType": "input"}},
+        ],
+    }
+
+
+def test_decoder_named_ports_resolve_and_decode():
+    # Re-expresses the deleted Decoder.integration.test.js: the selector and numbered
+    # outputs wire by NAME (decoder0.input("sel"), decoder0.output("0")), and the wired
+    # program actually decodes. The behavioral half is the proof the named port exists on
+    # the node — a bad name would raise at connect() time.
+    src0 = view.generate(_decoder_ggc(0))
+    assert '.input("sel")' in src0            # sel resolved by name, not positional index
+    assert '.output("0")' in src0
+    assert _output(_run(src0), "Y").value == 1  # sel=0 lights output "0"
+    assert _output(_run(view.generate(_decoder_ggc(1))), "Y").value == 0  # sel=1 -> "0" low
 
 
 def test_unresolved_wire_is_skipped_not_crashed():
