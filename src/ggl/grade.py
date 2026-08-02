@@ -56,6 +56,50 @@ def clock_without_reset(ggc):
     return labels
 
 
+def _format_failure(d):
+    """Turn a CircuitError's structured detail into one student-readable ``FAIL:`` line.
+
+    ``grade test -v`` shows the diff of expected-vs-actual *stdout*, so this line is the
+    entire failure explanation a student sees. Each known failure mode gets a sentence that
+    names the offending thing and, where useful, what the circuit actually offers. Unknown
+    engine errors fall back to a cleaned-up code so nothing shows a raw i18n key.
+    """
+    code = d.get("error_code", "error")
+    name = d.get("name")
+    label = d.get("component_label")
+
+    def avail(kind):
+        labels = d.get("available") or []
+        return f'circuit {kind}: ' + (", ".join(labels) if labels else "(none)")
+
+    if code == "testInputNotFound":
+        return f'FAIL: no input labeled "{name}" — {avail("inputs")}'
+    if code == "testOutputNotFound":
+        return f'FAIL: no output labeled "{name}" — {avail("outputs")}'
+    if code == "testAmbiguousLabel":
+        return f'FAIL: more than one component is labeled "{name}"'
+    if code == "testNoClock":
+        return "FAIL: this test drives a clock, but the circuit has no clock component"
+    if code == "testStopNotReached":
+        return (f'FAIL: output "{name}" never reached {d.get("value")} within '
+                f'{d.get("cycles")} clock cycles')
+    if code == "testFailed":
+        msg = (f'FAIL: output "{d.get("output")}" expected {d.get("expected")} '
+               f'but got {d.get("actual")}')
+        if d.get("inputs"):
+            msg += f' (inputs: {d["inputs"]})'
+        return msg
+    # Any other engine error (open input, bit-width mismatch, short circuit, ...): strip the
+    # "simulation.errors." i18n prefix so the student sees a plain code, plus context.
+    plain = str(code).rsplit(".", 1)[-1]
+    parts = [f"FAIL: {plain}"]
+    if label:
+        parts.append(f'in component "{label}"')
+    if d.get("port_name"):
+        parts.append(f'(port {d["port_name"]})')
+    return " ".join(parts)
+
+
 def grade(ggc):
     """Grade a .ggc dict. Returns (ok: bool, message: str).
 
@@ -74,19 +118,22 @@ def grade(ggc):
     except Exception as err:  # noqa: BLE001 - any failure is a grading failure
         detail = getattr(err, "to_dict", None)
         if callable(detail):
-            d = detail()
-            parts = [str(d.get("error_code", "error"))]
-            if d.get("component_label"):
-                parts.append(f'component "{d["component_label"]}"')
-            if d.get("output"):
-                parts.append(f'output {d["output"]}')
-            if "expected" in d:
-                parts.append(f'expected {d["expected"]}')
-            if "actual" in d:
-                parts.append(f'got {d["actual"]}')
-            return False, "FAIL: " + " ".join(parts)
+            return False, _format_failure(detail())
         return False, f"FAIL: {err}"
     return True, "PASS"
+
+
+def _load_json(path, what):
+    """Load a JSON file, or print a ``FAIL:`` line and return None. ``what`` names the file
+    for the message (e.g. "circuit file", "test spec")."""
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"FAIL: {what} not found: {path}")
+    except json.JSONDecodeError as err:
+        print(f"FAIL: {what} is not valid JSON ({path}): {err}")
+    return None
 
 
 def main(argv=None):
@@ -99,11 +146,17 @@ def main(argv=None):
                              "Test in the circuit")
     args = parser.parse_args(argv)
 
-    with open(args.circuit) as f:
-        ggc = json.load(f)
+    # A student most often fails here: the circuit isn't committed, or is named something
+    # other than what the assignment's test case expects. Say so on stdout (where `grade
+    # test -v` shows it) instead of dumping a traceback to stderr.
+    ggc = _load_json(args.circuit, "circuit file")
+    if ggc is None:
+        return 1
     if args.test:
-        with open(args.test) as f:
-            ggc = inject_test(ggc, json.load(f))
+        test_props = _load_json(args.test, "test spec")
+        if test_props is None:
+            return 1
+        ggc = inject_test(ggc, test_props)
 
     # Diagnostic to stderr (kept off stdout so it never affects the graded result): a
     # clocked test with no reset can be non-deterministic, so warn the author.

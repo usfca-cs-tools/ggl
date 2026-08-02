@@ -267,7 +267,10 @@ class Test(Node):
         unique, so an ambiguous name is a distinct error."""
         matches = [n for n in nodes if n.label == name]
         if not matches:
-            self._raise(not_found_code, name=name)
+            # Include the labels the circuit *does* expose so a mis-named test
+            # column tells the author (or student) exactly what to match.
+            self._raise(not_found_code, name=name,
+                        available=sorted(n.label for n in nodes if n.label))
         if len(matches) > 1:
             self._raise('testAmbiguousLabel', name=name)
         return matches[0]

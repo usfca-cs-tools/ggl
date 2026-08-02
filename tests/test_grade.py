@@ -33,7 +33,10 @@ def test_inject_replaces_embedded_test_and_grades():
 def test_injected_test_can_fail():
     ggc = grade.inject_test(_counter(), _counter_test_props(5, 6))  # stops at 5, expects 6
     ok, msg = grade.grade(ggc)
-    assert not ok and msg.startswith("FAIL:") and "testFailed" in msg and "got 5" in msg
+    assert not ok and msg.startswith("FAIL:")
+    # Student-readable: names the output and both values, no raw error code.
+    assert 'output "COUNT"' in msg and "expected 6" in msg and "got 5" in msg
+    assert "testFailed" not in msg
 
 
 def test_inject_drops_a_student_supplied_test():
@@ -95,3 +98,46 @@ def test_cli_fail_exits_nonzero(tmp_path, capsys):
     rc = grade.main([str(circuit), "--test", str(spec)])
     assert rc == 1
     assert capsys.readouterr().out.strip().startswith("FAIL:")
+
+
+# --- Failure-mode messaging: each mode must produce one clear FAIL line on stdout, since
+# that stdout is exactly what `grade test -v` shows the student in its expected-vs-actual diff.
+
+def test_missing_circuit_file_is_a_clean_fail(tmp_path, capsys):
+    rc = grade.main([str(tmp_path / "nope.ggc"), "--test", str(tmp_path / "t.json")])
+    out = capsys.readouterr().out.strip()
+    assert rc == 1 and out == f"FAIL: circuit file not found: {tmp_path / 'nope.ggc'}"
+
+
+def test_missing_test_spec_is_a_clean_fail(tmp_path, capsys):
+    circuit = tmp_path / "student.ggc"
+    circuit.write_text(json.dumps(_counter()))
+    rc = grade.main([str(circuit), "--test", str(tmp_path / "missing.json")])
+    out = capsys.readouterr().out.strip()
+    assert rc == 1 and out.startswith("FAIL: test spec not found:")
+
+
+def test_corrupt_circuit_json_is_a_clean_fail(tmp_path, capsys):
+    circuit = tmp_path / "student.ggc"
+    circuit.write_text("{ not json")
+    rc = grade.main([str(circuit)])
+    out = capsys.readouterr().out.strip()
+    assert rc == 1 and out.startswith("FAIL: circuit file is not valid JSON")
+
+
+def test_mis_named_input_names_the_label_and_lists_available():
+    bad = _counter_test_props(5, 5)
+    bad["table"]["inputNames"] = ["NOPE"]
+    ok, msg = grade.grade(grade.inject_test(_counter(), bad))
+    assert not ok
+    assert 'no input labeled "NOPE"' in msg
+    assert "EN" in msg and "CLR" in msg  # tells the student what the circuit actually has
+
+
+def test_mis_named_output_names_the_label_and_lists_available():
+    bad = _counter_test_props(5, 5)
+    bad["table"]["outputNames"] = ["WRONG"]
+    ok, msg = grade.grade(grade.inject_test(_counter(), bad))
+    assert not ok
+    assert 'no output labeled "WRONG"' in msg
+    assert "COUNT" in msg
