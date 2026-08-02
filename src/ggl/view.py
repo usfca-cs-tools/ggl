@@ -43,6 +43,16 @@ def _var(comp_id):
     return "n_" + re.sub(r"[^0-9a-zA-Z_]", "_", str(comp_id))
 
 
+def _str_list(names):
+    return "[" + ", ".join(f'"{_esc(n)}"' for n in names) + "]"
+
+
+def _row_list(rows):
+    return "[" + ", ".join(
+        "[" + ", ".join(str(int(v or 0)) for v in (row or [])) + "]" for row in rows
+    ) + "]"
+
+
 def _san(s):
     return re.sub(r"[^0-9a-zA-Z_]", "_", str(s))
 
@@ -145,6 +155,29 @@ def _component_expr(comp):
         ab, db = int(p.get("addressBits", 4)), int(p.get("dataBits", 8))
         return (f'memory.RAM(label="{_esc(label)}", address_bits={ab}, data_bits={db}, '
                 f'js_id="{_esc(js_id)}")', None)
+
+    # --- verification directive (not a circuit node; has no ports) ---
+    if t == "test":
+        table = p.get("table") or {}
+        args = [
+            f'label="{_esc(label)}"',
+            f'input_names={_str_list(table.get("inputNames") or [])}',
+            f'output_names={_str_list(table.get("outputNames") or [])}',
+            f'rows={_row_list(table.get("rows") or [])}',
+        ]
+        if p.get("stop_enabled"):
+            args += [
+                "stop_enabled=True",
+                f'stop_output_name="{_esc(p.get("stop_output_name", ""))}"',
+                f'stop_output_value={int(p.get("stop_output_value") or 0)}',
+            ]
+        if p.get("reset_enabled"):
+            args += [
+                "reset_enabled=True",
+                f'reset_input_name="{_esc(p.get("reset_input_name", ""))}"',
+            ]
+        args.append(f'js_id="{_esc(js_id)}"')
+        return (f'io.Test({", ".join(args)})', None)
 
     return (None, None)
 
@@ -299,12 +332,21 @@ def _emit_body(components, wires, junctions, circ_var, subdefs, templates, lines
         )
 
 
-def generate(ggc, run_call="circuit0.run()"):
+def generate(ggc, mode="run"):
     """Transform a ``.ggc`` dict into a GGL program string. Does not execute it.
 
-    ``run_call`` is the trailing statement that simulates once the program is exec'd:
-    ``circuit0.run()`` for a synchronous headless run (default, handy for tests), or
-    ``await circuit0.run_async()`` for the browser's free-running clock.
+    ``mode`` selects the trailing statement that simulates once the program is exec'd:
+
+      - ``"run"``       -> ``circuit0.run()``: one synchronous settle. Correct for
+                          combinational circuits; the default, and what headless tests use.
+      - ``"run_async"`` -> ``await circuit0.run_async()``: the browser's free-running loop,
+                          which drives the clock and live inputs — this is how a clocked
+                          circuit actually steps interactively.
+      - ``"test"``      -> ``<test>.evaluate(circuit0)`` for each Test component. evaluate()
+                          settles (or, for a clocked Test, pulses reset then cycles the clock
+                          until the stop output is reached) and checks the expected outputs —
+                          a bounded, self-checking run, so it is how a *sequential* circuit is
+                          exercised headlessly.
     """
     subdefs = ggc.get("schematicComponents", {}) or {}
     lines = [
@@ -343,5 +385,15 @@ def generate(ggc, run_call="circuit0.run()"):
     _emit_body(ggc.get("components", []) or [], ggc.get("wires", []) or [],
                ggc.get("wireJunctions", []) or [],
                "circuit0", subdefs, templates, lines, is_top=True)
-    lines.append(run_call)
+
+    if mode == "test":
+        # Each Test component was declared above (it has no ports, so it took no part in
+        # connection resolution); evaluate() runs and checks it against the built circuit.
+        for comp in ggc.get("components", []) or []:
+            if comp.get("type") == "test":
+                lines.append(f'{_var(comp["id"])}.evaluate(circuit0)')
+    elif mode == "run_async":
+        lines.append("await circuit0.run_async()")
+    else:
+        lines.append("circuit0.run()")
     return "\n".join(lines) + "\n"

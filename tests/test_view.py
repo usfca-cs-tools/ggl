@@ -105,13 +105,70 @@ def test_adder_4_bit_hierarchical(a, b):
     assert _output(ns, "COUT").value == (total >> 4)
 
 
+def _and_with_test(rows):
+    ggc = _and_ggc(0, 0)  # base AND circuit; the Test drives A/B itself
+    ggc["components"].append({
+        "id": "T", "type": "test", "x": 20, "y": 10, "ports": [],
+        "props": {"label": "AND",
+                  "table": {"inputNames": ["A", "B"], "outputNames": ["Y"], "rows": rows}},
+    })
+    return ggc
+
+
+def test_combinational_test_directive_self_checks():
+    # mode="test" emits io.Test(...) + test.evaluate(circuit0). A correct truth table
+    # passes (evaluate raises nothing); a wrong expected value raises testFailed.
+    _run(view.generate(_and_with_test([[0, 0, 0], [0, 1, 0], [1, 0, 0], [1, 1, 1]]), mode="test"))
+    from ggl.errors import CircuitError
+    with pytest.raises(CircuitError) as ei:
+        _run(view.generate(_and_with_test([[1, 1, 0]]), mode="test"))  # AND(1,1)=1, not 0
+    assert ei.value.error_code == "testFailed"
+
+
+def test_sequential_circuit_self_checks_via_clocked_test():
+    # The counter has no fixed input->output map; a clocked Test resets it (CLR pulse),
+    # sets EN=1, cycles the clock until COUNT reaches 5, then checks COUNT == 5. This
+    # exercises the whole sequential path headlessly through ggl.view (emit + evaluate).
+    ggc = _load("counter_4_bit.ggc")
+    ggc["components"].append({
+        "id": "T", "type": "test", "x": 0, "y": 0, "ports": [],
+        "props": {
+            "label": "count",
+            "table": {"inputNames": ["EN"], "outputNames": ["COUNT"], "rows": [[1, 5]]},
+            "reset_enabled": True, "reset_input_name": "CLR",
+            "stop_enabled": True, "stop_output_name": "COUNT", "stop_output_value": 5,
+        },
+    })
+    _run(view.generate(ggc, mode="test"))  # no raise => counter reached 5 and COUNT == 5
+
+
+def test_run_tail_selection():
+    ggc = _and_ggc(1, 1)
+    assert view.generate(ggc, mode="run").rstrip().endswith("circuit0.run()")
+    assert view.generate(ggc, mode="run_async").rstrip().endswith("await circuit0.run_async()")
+
+
+def test_test_emitter_builds_a_valid_io_test():
+    expr, _ = view._component_expr({"id": "t", "type": "test", "props": {
+        "label": "c", "table": {"inputNames": ["A", "B"], "outputNames": ["Y"], "rows": [[1, 1, 1]]},
+        "stop_enabled": True, "stop_output_name": "COUNT", "stop_output_value": 5,
+        "reset_enabled": True, "reset_input_name": "CLR"}})
+    from ggl import io
+    ns = {"io": io}
+    exec(f"t = {expr}", ns)  # noqa: S102
+    t = ns["t"]
+    assert t.kind == "Test"
+    assert t.input_names == ["A", "B"] and t.output_names == ["Y"]
+    assert t.stop_enabled and t.stop_output_value == 5 and t.reset_input_name == "CLR"
+
+
 def test_counter_4_bit_counts_when_clocked():
     # Real app-saved v1.4 fixture: a 4-bit counter nesting register -> D flip-flop ->
     # D-latch -> SR-latch (feedback), with junctions for fan-out and an internal constant.
     # Exercises the whole sequential hierarchical path: it must reset on CLR and then
     # increment on each clock edge.
     ggc = _load("counter_4_bit.ggc")
-    ns = _run(view.generate(ggc, run_call="circuit0.run()"))
+    ns = _run(view.generate(ggc))  # mode="run": settle once, then we drive the clock
     circ = ns["circuit0"]
 
     def set_input(label, value):
