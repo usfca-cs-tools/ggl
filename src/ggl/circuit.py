@@ -4,7 +4,7 @@ from collections import deque
 from .edge import Edge
 from .node import Node, Connector
 from .ggl_logging import new_logger, set_global_js_logging
-from .io import Input, Output, Clock
+from .io import Input, Output, Clock, Constant
 from .errors import CircuitError
 from . import edge as edge_module
 from . import callbacks
@@ -289,11 +289,15 @@ class Circuit:
         if isinstance(srcnode, CircuitNode):
             srcnode._wire_child_output(srcname, edge)
 
-        # Seed the simulation from Input Nodes — and from the Clock, which is
-        # an ordinary signal as far as propagation is concerned.
-        if srcnode.kind in (Input.kind, Clock.kind) and srcnode not in self.inputs:
+        # Seed the simulation from every value-emitting root — Input, Clock, and Constant
+        # all behave identically here: they hold a value and push it downstream.
+        if srcnode.kind in (Input.kind, Clock.kind, Constant.kind) and srcnode not in self.inputs:
             self.inputs.append(srcnode)
-            srcnode.circuit = self
+            # Only an Input's value setter re-propagates through this back-reference; a
+            # Clock is driven by the circuit and a Constant never changes, so neither reads
+            # it and neither gets one.
+            if srcnode.kind == Input.kind:
+                srcnode.circuit = self
         if destnode.kind == Output.kind and destnode not in self.outputs:
             self.outputs.append(destnode)
 

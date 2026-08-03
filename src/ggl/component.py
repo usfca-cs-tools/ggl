@@ -23,8 +23,13 @@ class CircuitNode(Node):
         self._instance_id = instance_id
 
         # Extract input and output names from the ORIGINAL template (not cloned circuit)
-        # This ensures the external interface uses the original names
-        input_names = [inp.label for inp in template.inputs]
+        # This ensures the external interface uses the original names. A subcircuit's
+        # interface inputs are its Input nodes only — a Constant or Clock is a self-driven
+        # internal source (it lands in circuit.inputs for seeding, but must NOT become an
+        # external port, or it would look like an unconnected input on the CircuitNode).
+        from .io import Input
+        interface_inputs = [inp for inp in template.inputs if inp.kind == Input.kind]
+        input_names = [inp.label for inp in interface_inputs]
         output_names = [out.label for out in template.outputs]
 
         # Initialize as a Node with the circuit's interface
@@ -38,7 +43,7 @@ class CircuitNode(Node):
 
         # Create mapping from original names to cloned node names for internal use
         self._input_mapping = {
-            i.label: f"{i.label}_{instance_id}" for i in template.inputs}
+            i.label: f"{i.label}_{instance_id}" for i in interface_inputs}
         self._output_mapping = {
             o.label: f"{o.label}_{instance_id}" for o in template.outputs}
 
