@@ -190,6 +190,36 @@ def test_counter_4_bit_counts_when_clocked():
     assert seq == [1, 2, 3, 4, 5, 6]
 
 
+def test_counter_no_subcircuits_counts_when_clocked():
+    # The same behavior from a counter built out of ggl CLASSES, not gate-level subcircuits:
+    # register -> adder(+1) -> mux -> register, where the mux picks the sum or a constant 0
+    # by CLR (a SYNCHRONOUS clear). Complements counter_4_bit's hierarchical path — this one
+    # exercises the direct class emitters (Register/Adder/Multiplexer) and their named-port
+    # connections (D/CLK/en/Q, sel/0/1, a/b/cin/sum) with no schematicComponents.
+    ggc = _load("counter-no-subcircuits.ggc")
+    src = view.generate(ggc)
+    assert "memory.Register(" in src and "plexers.Multiplexer(" in src  # flat, class-level
+    ns = _run(src)
+    circ = ns["circuit0"]
+    count = _output(ns, "COUNT")
+
+    def set_clr(v):
+        for n in circ.inputs:
+            if n.label == "CLR":
+                n.value = v
+
+    set_clr(1)
+    circ.cycle()
+    assert count.value == 0  # synchronous clear: CLR=1 loads 0 through the mux on the edge
+
+    set_clr(0)  # EN is a hardwired constant here, so counting just needs the clock
+    seq = []
+    for _ in range(6):
+        circ.cycle()
+        seq.append(count.value)
+    assert seq == [1, 2, 3, 4, 5, 6]
+
+
 @pytest.mark.parametrize("comp,expected_kind", [
     ({"type": "adder", "props": {"label": "+", "bits": 8}}, "Adder"),
     ({"type": "subtract", "props": {"label": "-", "bits": 8}}, "Subtract"),
