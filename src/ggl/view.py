@@ -244,6 +244,30 @@ def _endpoints(wire):
     return (_r(s.get("x")), _r(s.get("y"))), (_r(e.get("x")), _r(e.get("y")))
 
 
+def _wire_path(wire):
+    """The wire's routed polyline as rounded (x, y) vertices. Falls back to the two
+    endpoints when no explicit ``points`` array is present."""
+    pts = wire.get("points")
+    if pts:
+        return [(_r(p.get("x")), _r(p.get("y"))) for p in pts]
+    return list(_endpoints(wire))
+
+
+def _wire_covers(wire, pt):
+    """True when ``pt`` lies on the wire — at a vertex or anywhere along a segment.
+    Used to find the trunk a junction taps by geometry rather than a stored index."""
+    px, py = pt
+    path = _wire_path(wire)
+    for (ax, ay), (bx, by) in zip(path, path[1:]):
+        # Collinear (zero cross product) and within the segment's bounding box.
+        if abs((bx - ax) * (py - ay) - (by - ay) * (px - ax)) < 1e-6 and (
+            min(ax, bx) - 1e-6 <= px <= max(ax, bx) + 1e-6
+            and min(ay, by) - 1e-6 <= py <= max(ay, by) + 1e-6
+        ):
+            return True
+    return False
+
+
 def _group_nets(wires, junctions):
     """Union-find wires into electrical nets — joined by a shared endpoint coordinate or by
     a junction — and return a list of nets, each a list of wire indices."""
@@ -271,11 +295,23 @@ def _group_nets(wires, junctions):
         for j in group[1:]:
             union(group[0], j)
 
+    # A junction is a T-tap: a branch wire meets a trunk wire mid-run at ``pos``,
+    # joining them into one net. Resolve the trunk (and branch) by GEOMETRY — every
+    # wire whose routed path passes through ``pos`` — rather than the serialized
+    # positional ``sourceWireIndex``. That index is fragile: after edits/reordering it
+    # can point at an unrelated wire and weld two independent nets together (e.g. input
+    # A's fan-out net into input B's, silently dropping B as a driver). ``connectedWireId``
+    # is a stable id, so include it too in case a branch endpoint rounds off the path.
     id_to_i = {wire.get("id"): i for i, wire in enumerate(wires)}
     for jn in junctions or []:
-        si, ci = jn.get("sourceWireIndex"), id_to_i.get(jn.get("connectedWireId"))
-        if isinstance(si, int) and 0 <= si < n and ci is not None:
-            union(si, ci)
+        pos = jn.get("pos") or {}
+        key = (_r(pos.get("x")), _r(pos.get("y")))
+        touching = [i for i, wire in enumerate(wires) if _wire_covers(wire, key)]
+        ci = id_to_i.get(jn.get("connectedWireId"))
+        if ci is not None and ci not in touching:
+            touching.append(ci)
+        for k in touching[1:]:
+            union(touching[0], k)
 
     nets = defaultdict(list)
     for i in range(n):

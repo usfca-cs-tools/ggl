@@ -190,6 +190,39 @@ def test_counter_4_bit_counts_when_clocked():
     assert seq == [1, 2, 3, 4, 5, 6]
 
 
+def test_junction_trunk_resolved_by_geometry_not_stale_index():
+    # A junction is a T-tap: a branch wire meets a trunk mid-run at `pos`. The trunk must
+    # be found by GEOMETRY (which wire passes through `pos`), not the serialized positional
+    # `sourceWireIndex`. That index goes stale after edits and can point at a wire in an
+    # unrelated net — welding two independent nets into one, so the resolver keeps only the
+    # first driver and silently drops the other. This is exactly how a 1-bit-adder subcircuit
+    # lost its `B` input (A's fan-out net absorbed B's), which then blew up as KeyError 'B'
+    # when the parent tried to drive the vanished port.
+    wires = [
+        # 0: net A trunk — horizontal at y=0; (5,0) is mid-span, NOT an endpoint.
+        {"id": "wA", "startConnection": {"pos": {"x": 1, "y": 0}},
+         "endConnection": {"pos": {"x": 9, "y": 0}},
+         "points": [{"x": 1, "y": 0}, {"x": 9, "y": 0}]},
+        # 1: net A branch tapping the trunk at (5,0) — joined only by the junction.
+        {"id": "wAb", "startConnection": {"pos": {"x": 5, "y": 0}},
+         "endConnection": {"pos": {"x": 5, "y": 3}},
+         "points": [{"x": 5, "y": 0}, {"x": 5, "y": 3}]},
+        # 2: net B — a completely separate wire at y=10.
+        {"id": "wB", "startConnection": {"pos": {"x": 1, "y": 10}},
+         "endConnection": {"pos": {"x": 9, "y": 10}},
+         "points": [{"x": 1, "y": 10}, {"x": 9, "y": 10}]},
+    ]
+    # The junction taps wA at (5,0) with branch wAb — but sourceWireIndex is stale and points
+    # at wB (index 2), a wire in the other net. Geometry (pos on wA) must win.
+    junctions = [{"pos": {"x": 5, "y": 0}, "connectedWireId": "wAb", "sourceWireIndex": 2}]
+    net_of = {}
+    for k, net in enumerate(view._group_nets(wires, junctions)):
+        for i in net:
+            net_of[i] = k
+    assert net_of[0] == net_of[1]  # branch joins its real trunk (A), via geometry
+    assert net_of[2] != net_of[0]  # net B stays independent despite the stale index
+
+
 def test_counter_no_subcircuits_counts_when_clocked():
     # The same behavior from a counter built out of ggl CLASSES, not gate-level subcircuits:
     # register -> adder(+1) -> mux -> register, where the mux picks the sum or a constant 0
