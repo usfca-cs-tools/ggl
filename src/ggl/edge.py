@@ -86,7 +86,11 @@ class Edge:
         if gate_on_change and self.value == value and self.prev_value is not None:
             return []
 
-        callbacks.emit('step', self.js_id, {'active': value == 1, 'style': 'processing'})
+        # Carry the numeric value and bit width too, so the UI can show what a bus is
+        # propagating on hover (issue #133). 'active' stays value==1 for the existing
+        # high/low wire coloring; value/bits are additive.
+        callbacks.emit('step', self.js_id,
+                       {'active': value == 1, 'style': 'processing', 'value': value, 'bits': bits})
 
         self.prev_value = self.value
         self.value = value

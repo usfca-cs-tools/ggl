@@ -36,6 +36,25 @@ def test_settle_delivers_one_batch_to_registered_callback():
     assert ["value", "out_1", 0] in json.loads(payload)
 
 
+def test_edge_step_carries_bus_value_and_bits():
+    # A wire's 'step' event (keyed by the wire js_id) carries the numeric value and bit
+    # width, so the UI can show what a multi-bit bus is propagating on hover (issue #133).
+    calls = []
+    callbacks.set_callback(lambda event, cid, payload: calls.append((event, cid, payload)))
+
+    c = circuit.Circuit()
+    a = io.Input(bits=4, label="a")
+    a.value = 10  # 0b1010 -> exercises a multi-bit value, not just 0/1
+    out = io.Output(bits=4, js_id="out_1")
+    c.connect(a, out, js_id="wire_1")
+    c.run()
+
+    updates = json.loads(calls[0][2])
+    step = next(u for u in updates if u[0] == "step" and u[1] == "wire_1")
+    assert step[2]["value"] == 10
+    assert step[2]["bits"] == 4
+
+
 def test_no_callback_is_a_noop():
     # With nothing registered, running must not raise.
     c = circuit.Circuit()
