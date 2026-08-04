@@ -305,6 +305,92 @@ def test_decoder_named_ports_resolve_and_decode():
     assert _output(_run(view.generate(_decoder_ggc(1))), "Y").value == 0  # sel=1 -> "0" low
 
 
+def _tunnel_ggc(value, pub_label="N", sub_label="N", pub_stored="input", sub_stored="output"):
+    """Input A -> publisher tunnel -> (virtual net) -> subscriber tunnel -> Output Y.
+    The tunnels' *stored* port directions are parameterized so a test can prove ggl.view
+    infers direction from wiring rather than trusting the prop."""
+    return {
+        "version": "1.4",
+        "components": [
+            {"id": "A", "type": "input", "x": 0, "y": 0,
+             "props": {"label": "A", "bits": 1, "value": value},
+             "ports": [{"name": "0", "x": 1, "y": 0, "direction": "output"}]},
+            {"id": "TP", "type": "tunnel", "x": 3, "y": 0,
+             "props": {"label": pub_label, "bits": 1, "direction": pub_stored},
+             "ports": [{"name": "0", "x": 0, "y": 0, "direction": pub_stored}]},
+            {"id": "TS", "type": "tunnel", "x": 5, "y": 0,
+             "props": {"label": sub_label, "bits": 1, "direction": sub_stored},
+             "ports": [{"name": "0", "x": 0, "y": 0, "direction": sub_stored}]},
+            {"id": "Y", "type": "output", "x": 7, "y": 0,
+             "props": {"label": "Y", "bits": 1},
+             "ports": [{"name": "0", "x": 0, "y": 0, "direction": "input"}]},
+        ],
+        "wires": [
+            {"id": "w1", "startConnection": {"pos": {"x": 1, "y": 0}, "portType": "output"},
+             "endConnection": {"pos": {"x": 3, "y": 0}, "portType": "input"}},
+            {"id": "w2", "startConnection": {"pos": {"x": 5, "y": 0}, "portType": "output"},
+             "endConnection": {"pos": {"x": 7, "y": 0}, "portType": "input"}},
+        ],
+    }
+
+
+@pytest.mark.parametrize("value", [0, 1])
+def test_tunnel_net_carries_value_across(value):
+    # Two same-label tunnels, no wire between them, form one net: A drives the publisher,
+    # the subscriber drives Y. End-to-end proof that generate() wires a virtual net.
+    ns = _run(view.generate(_tunnel_ggc(value)))
+    assert _output(ns, "Y").value == value
+
+
+def test_tunnel_direction_is_inferred_not_stored():
+    # Both tunnels carry the WRONG stored direction ("input"); ggl.view must infer from
+    # wiring — the one fed by A is the publisher (input), the one driving Y is the
+    # subscriber (output) — so the net still carries the value.
+    src = view.generate(_tunnel_ggc(1, pub_stored="input", sub_stored="input"))
+    assert 'direction="input"' in src and 'direction="output"' in src  # inferred, not stored
+    assert _output(_run(src), "Y").value == 1
+
+
+def test_tunnel_net_with_no_driver_raises():
+    # A subscriber tunnel drives Y but nothing feeds the net -> tunnelNoDriver.
+    from ggl.errors import CircuitError
+    ggc = _tunnel_ggc(1)
+    ggc["components"] = [c for c in ggc["components"] if c["id"] != "A"]  # remove the driver
+    ggc["wires"] = [w for w in ggc["wires"] if w["id"] != "w1"]
+    with pytest.raises(CircuitError) as ei:
+        view.generate(ggc)
+    assert ei.value.error_code == "simulation.errors.tunnelNoDriver"
+
+
+def test_tunnel_net_with_two_drivers_raises():
+    # Two publisher tunnels share a label -> contention -> tunnelMultipleDrivers.
+    from ggl.errors import CircuitError
+    ggc = _tunnel_ggc(1)
+    ggc["components"].append(
+        {"id": "B", "type": "input", "x": 0, "y": 4,
+         "props": {"label": "B", "bits": 1, "value": 1},
+         "ports": [{"name": "0", "x": 1, "y": 0, "direction": "output"}]})
+    ggc["components"].append(
+        {"id": "TP2", "type": "tunnel", "x": 3, "y": 4,
+         "props": {"label": "N", "bits": 1, "direction": "input"},
+         "ports": [{"name": "0", "x": 0, "y": 0, "direction": "input"}]})
+    ggc["wires"].append(
+        {"id": "w3", "startConnection": {"pos": {"x": 1, "y": 4}, "portType": "output"},
+         "endConnection": {"pos": {"x": 3, "y": 4}, "portType": "input"}})
+    with pytest.raises(CircuitError) as ei:
+        view.generate(ggc)
+    assert ei.value.error_code == "simulation.errors.tunnelMultipleDrivers"
+
+
+def test_tunnel_history_is_reset_per_program():
+    # tunnel_history is process-global; each generated program clears it at the top so a
+    # prior run's tunnels can't leak. Run label "N"=1, then label "N"=0 in the same process:
+    # without the reset, the stale publisher would still push 1 to the new subscriber.
+    assert "wires.Tunnel.reset_history()" in view.generate(_tunnel_ggc(1))
+    assert _output(_run(view.generate(_tunnel_ggc(1))), "Y").value == 1
+    assert _output(_run(view.generate(_tunnel_ggc(0))), "Y").value == 0
+
+
 def test_unresolved_wire_is_skipped_not_crashed():
     # A wire whose endpoint hits no port must be dropped, not raise.
     ggc = _and_ggc(1, 1)

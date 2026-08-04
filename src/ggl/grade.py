@@ -89,6 +89,10 @@ def _format_failure(d):
         if d.get("inputs"):
             msg += f' (inputs: {d["inputs"]})'
         return msg
+    if code == "tunnelNoDriver":
+        return f'FAIL: tunnel net "{d.get("label")}" has no driver'
+    if code == "tunnelMultipleDrivers":
+        return f'FAIL: tunnel net "{d.get("label")}" has more than one driver'
     # Any other engine error (open input, bit-width mismatch, short circuit, ...): strip the
     # "simulation.errors." i18n prefix so the student sees a plain code, plus context.
     plain = str(code).rsplit(".", 1)[-1]
@@ -112,8 +116,10 @@ def grade(ggc):
     if not any(c.get("type") == "test" for c in components):
         return False, "NO TESTS"
 
-    program = view.generate(ggc, mode="test")
     try:
+        # generate() can itself raise a CircuitError (e.g. an invalid tunnel net), so it's
+        # inside the try — its structured detail is formatted like any run-time failure.
+        program = view.generate(ggc, mode="test")
         exec(compile(program, "<ggl.grade>", "exec"), {})  # noqa: S102 - our own code
     except Exception as err:  # noqa: BLE001 - any failure is a grading failure
         detail = getattr(err, "to_dict", None)

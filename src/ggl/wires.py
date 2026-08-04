@@ -103,9 +103,18 @@ class Tunnel(WireNode):
         )
 
         self.direction = direction
-        
+
         if self.label:
             Tunnel.tunnel_history.setdefault(self.label, []).append(self)
+
+    @classmethod
+    def reset_history(cls):
+        """Clear the process-global label registry. tunnel_history is a class attribute
+        that accumulates every Tunnel ever constructed, so in a persistent interpreter
+        (the browser's Pyodide session, or an autograder looping over circuits) stale
+        tunnels from a previous circuit would linger under the same label. Each generated
+        program calls this once at the top so a run only sees its own tunnels."""
+        cls.tunnel_history = {}
 
     def is_output_tunnel(self):
         return self.direction == 'output'

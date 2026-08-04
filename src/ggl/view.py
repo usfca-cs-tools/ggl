@@ -24,6 +24,12 @@ so a placement's positional port ("0","1",...) is mapped to the inner label by p
 
 import re
 
+from .errors import (
+    CircuitError,
+    ERROR_TUNNEL_MULTIPLE_DRIVERS,
+    ERROR_TUNNEL_NO_DRIVER,
+)
+
 _GATE_CLASS = {
     "and-gate": "And",
     "or-gate": "Or",
@@ -62,10 +68,11 @@ def _r(v):
     return round(float(v), 3)
 
 
-def _component_expr(comp):
+def _component_expr(comp, tunnel_dir=None):
     """Return (construction_expr, value_init) for a leaf (non-subcircuit) component, or
     (None, None) if the type isn't a runnable node. value_init is the int to assign to
-    ``.value`` after construction (sources), else None."""
+    ``.value`` after construction (sources), else None. ``tunnel_dir`` overrides a tunnel's
+    stored direction with the one inferred from its wiring (see _infer_tunnel_directions)."""
     t = comp.get("type")
     p = comp.get("props", {}) or {}
     label = p.get("label", "")
@@ -103,9 +110,12 @@ def _component_expr(comp):
         return (f'wires.Merger(label="{_esc(label)}", bits={p.get("outputBits", 1)}, '
                 f'merge_inputs={merges}, js_id="{_esc(js_id)}")', None)
     if t == "tunnel":
-        # Same-labelled tunnels are joined inside the engine; we just emit the node.
+        # A tunnel's direction is derived from what it's wired to (a tunnel fed by a driver
+        # publishes to the net -> input; one that drives a sink reads from it -> output), not
+        # from the stored prop. Same-label tunnels are joined inside the engine.
+        direction = tunnel_dir if tunnel_dir is not None else p.get("direction", "input")
         return (f'wires.Tunnel(label="{_esc(label)}", bits={bits}, '
-                f'direction="{_esc(p.get("direction", "input"))}", js_id="{_esc(js_id)}")', None)
+                f'direction="{_esc(direction)}", js_id="{_esc(js_id)}")', None)
 
     # --- arithmetic ---
     if t == "adder":
@@ -190,10 +200,13 @@ def _inner_labels(subdefs, circuit_id, direction):
     return [c.get("props", {}).get("label", "") for c in inner if c.get("type") == want]
 
 
-def _port_index(components, var_of, subdefs):
+def _port_index(components, var_of, subdefs, tunnel_dirs=None):
     """Map rounded absolute coordinate (x, y) -> list of (var, port_name, direction).
     For a schematic-component the positional port name is translated to the inner
-    circuit's label so it matches the CircuitNode's port."""
+    circuit's label so it matches the CircuitNode's port. A tunnel's port direction is
+    taken from ``tunnel_dirs`` (inferred from wiring) so the resolver buckets it as
+    driver vs sink consistently with the emitted node."""
+    tunnel_dirs = tunnel_dirs or {}
     index = {}
     for comp in components:
         var = var_of.get(comp.get("id"))
@@ -202,8 +215,9 @@ def _port_index(components, var_of, subdefs):
         cx, cy = comp.get("x", 0), comp.get("y", 0)
         is_sch = comp.get("type") == "schematic-component"
         cid = (comp.get("props", {}) or {}).get("circuitId") if is_sch else None
+        tunnel_dir = tunnel_dirs.get(comp.get("id")) if comp.get("type") == "tunnel" else None
         for port in comp.get("ports", []) or []:
-            direction = port.get("direction")
+            direction = tunnel_dir if tunnel_dir is not None else port.get("direction")
             name = port.get("name")
             if is_sch and cid in subdefs:
                 labels = _inner_labels(subdefs, cid, direction)
@@ -230,15 +244,9 @@ def _endpoints(wire):
     return (_r(s.get("x")), _r(s.get("y"))), (_r(e.get("x")), _r(e.get("y")))
 
 
-def _resolve_connections(wires, junctions, index):
-    """Group wires into electrical nets and return (src, dst, wire_id) connections.
-
-    A net is a maximal set of wires joined either by a shared endpoint coordinate or by
-    a junction (a branch wire meeting another wire mid-run). Each net's ports are found
-    by matching every endpoint against the port index; the net's one output drives each
-    of its inputs. This subsumes both fan-out styles: multiple wires off one output port,
-    and junction branches off a trunk wire.
-    """
+def _group_nets(wires, junctions):
+    """Union-find wires into electrical nets — joined by a shared endpoint coordinate or by
+    a junction — and return a list of nets, each a list of wire indices."""
     from collections import defaultdict
 
     n = len(wires)
@@ -272,9 +280,87 @@ def _resolve_connections(wires, junctions, index):
     nets = defaultdict(list)
     for i in range(n):
         nets[find(i)].append(i)
+    return list(nets.values())
 
+
+def _infer_tunnel_directions(components, wires, junctions):
+    """Infer each tunnel's direction from what it's wired to, ignoring the stored prop.
+    Returns ``{js_id: "input"|"output"}`` for every *wired* tunnel.
+
+    A tunnel whose local net contains a real driver (a non-tunnel output port) is a
+    publisher: it reads that driven value and pushes it onto the named net, so its own port
+    is an input. Otherwise the tunnel is a subscriber — it sources the net's value onto a
+    local wire, so its port is an output. An unwired tunnel is in no net and is omitted.
+    """
+    from collections import defaultdict
+
+    port_at = defaultdict(list)  # coord -> [(comp_id, direction, is_tunnel)]
+    for comp in components:
+        is_tunnel = comp.get("type") == "tunnel"
+        cx, cy = comp.get("x", 0), comp.get("y", 0)
+        for port in comp.get("ports", []) or []:
+            key = (_r(cx + port.get("x", 0)), _r(cy + port.get("y", 0)))
+            port_at[key].append((comp.get("id"), port.get("direction"), is_tunnel))
+
+    result = {}
+    for net in _group_nets(wires, junctions):
+        coords = {key for i in net for key in _endpoints(wires[i])}
+        has_driver = any(
+            direction == "output" and not is_tunnel
+            for key in coords
+            for (_cid, direction, is_tunnel) in port_at.get(key, [])
+        )
+        for key in coords:
+            for (cid, _direction, is_tunnel) in port_at.get(key, []):
+                if is_tunnel:
+                    result[cid] = "input" if has_driver else "output"
+    return result
+
+
+def _validate_tunnel_nets(components, tunnel_dirs):
+    """Raise a CircuitError for a tunnel net that cannot work: no driver (every same-label
+    tunnel is a subscriber, so they would read nothing) or more than one driver (two
+    publishers contend). Only labelled, wired tunnels form a net."""
+    from collections import defaultdict
+
+    by_label = defaultdict(lambda: {"publishers": [], "subscribers": []})
+    for comp in components:
+        if comp.get("type") != "tunnel":
+            continue
+        direction = tunnel_dirs.get(comp.get("id"))
+        if direction is None:
+            continue  # unwired tunnel: part of no net
+        label = (comp.get("props", {}) or {}).get("label", "")
+        if not label:
+            continue  # an unlabelled tunnel names no net (the engine ignores it)
+        bucket = "publishers" if direction == "input" else "subscribers"
+        by_label[label][bucket].append(comp)
+
+    for label, group in by_label.items():
+        publishers, subscribers = group["publishers"], group["subscribers"]
+        if len(publishers) >= 2:
+            bad = publishers[1]
+            raise CircuitError(
+                component_id=bad.get("id"), component_type="tunnel",
+                component_label=label, error_code=ERROR_TUNNEL_MULTIPLE_DRIVERS, label=label)
+        if not publishers and subscribers:
+            bad = subscribers[0]
+            raise CircuitError(
+                component_id=bad.get("id"), component_type="tunnel",
+                component_label=label, error_code=ERROR_TUNNEL_NO_DRIVER, label=label)
+
+
+def _resolve_connections(wires, junctions, index):
+    """Group wires into electrical nets and return (src, dst, wire_id) connections.
+
+    A net is a maximal set of wires joined either by a shared endpoint coordinate or by
+    a junction (a branch wire meeting another wire mid-run). Each net's ports are found
+    by matching every endpoint against the port index; the net's one output drives each
+    of its inputs. This subsumes both fan-out styles: multiple wires off one output port,
+    and junction branches off a trunk wire.
+    """
     conns = []
-    for net in nets.values():
+    for net in _group_nets(wires, junctions):
         outs, ins, input_wire = [], [], {}
         for i in net:
             for key in _endpoints(wires[i]):
@@ -299,6 +385,11 @@ def _resolve_connections(wires, junctions, index):
 def _emit_body(components, wires, junctions, circ_var, subdefs, templates, lines, is_top):
     """Emit node declarations and connect() calls for one circuit (top level or a
     subcircuit body) into ``circ_var``."""
+    # A tunnel's direction is derived from its wiring (not the stored prop), and same-label
+    # tunnels must form a valid net (exactly one driver). Resolve and check both up front.
+    tunnel_dirs = _infer_tunnel_directions(components, wires, junctions)
+    _validate_tunnel_nets(components, tunnel_dirs)
+
     var_of = {}
     value_inits = []
     for comp in components:
@@ -312,7 +403,9 @@ def _emit_body(components, wires, junctions, circ_var, subdefs, templates, lines
             var_of[comp["id"]] = var
             lines.append(f"{var} = {tvar}()")
             continue
-        expr, init = _component_expr(comp)
+        expr, init = _component_expr(
+            comp, tunnel_dir=tunnel_dirs.get(comp.get("id")) if t == "tunnel" else None
+        )
         if expr is None:
             continue
         var = _var(comp["id"])
@@ -324,7 +417,7 @@ def _emit_body(components, wires, junctions, circ_var, subdefs, templates, lines
             value_inits.append(f"{var}.value = {init}")
     lines.extend(value_inits)
 
-    index = _port_index(components, var_of, subdefs)
+    index = _port_index(components, var_of, subdefs, tunnel_dirs)
     for (svar, sname), (dvar, dname), js in _resolve_connections(wires, junctions, index):
         lines.append(
             f'{circ_var}.connect({svar}.output("{sname}"), '
@@ -352,6 +445,9 @@ def generate(ggc, mode="run"):
     lines = [
         "from ggl import arithmetic, circuit, component, io, logic, memory, plexers, wires"
     ]
+    # Tunnels join by label through a process-global registry; clear it so a prior run's
+    # tunnels (in a persistent Pyodide/CPython session) never leak into this circuit.
+    lines.append("wires.Tunnel.reset_history()")
 
     templates = {}  # circuitId -> template variable name
 
