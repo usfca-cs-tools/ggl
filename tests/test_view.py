@@ -190,6 +190,46 @@ def test_counter_4_bit_counts_when_clocked():
     assert seq == [1, 2, 3, 4, 5, 6]
 
 
+def test_unconnected_subcircuit_output_raises_clear_error():
+    # A subcircuit output that isn't wired inside never enters the circuit's interface, so
+    # the Component lacks that port and the PARENT's connect to it would blow up deep in the
+    # engine with a bare KeyError. view.generate must instead raise a clear CircuitError
+    # naming the circuit and port, at generation time. Here 'Y' is left unconnected (the
+    # gate->Y wire is omitted); 'A' feeds both gate inputs so only 'Y' is the problem.
+    sub = {
+        "components": [
+            {"id": "A", "type": "input", "x": 0, "y": 0, "props": {"label": "A", "bits": 1},
+             "ports": [{"name": "0", "x": 1, "y": 0, "direction": "output"}]},
+            {"id": "G", "type": "and-gate", "x": 5, "y": 0, "props": {"label": "g", "numInputs": 2},
+             "ports": [{"name": "0", "x": 0, "y": 0, "direction": "input"},
+                       {"name": "1", "x": 0, "y": 2, "direction": "input"},
+                       {"name": "0", "x": 3, "y": 1, "direction": "output"}]},
+            {"id": "Y", "type": "output", "x": 10, "y": 1, "props": {"label": "Y", "bits": 1},
+             "ports": [{"name": "0", "x": 0, "y": 0, "direction": "input"}]},
+        ],
+        "wires": [
+            {"id": "w1", "startConnection": {"pos": {"x": 1, "y": 0}}, "endConnection": {"pos": {"x": 5, "y": 0}}},
+            {"id": "w2", "startConnection": {"pos": {"x": 1, "y": 0}}, "endConnection": {"pos": {"x": 5, "y": 2}}},
+            # NOTE: no wire from the gate output (8,1) to Y (10,1) — Y is left dangling.
+        ],
+    }
+    ggc = {
+        "version": "1.4",
+        "components": [
+            {"id": "S", "type": "schematic-component", "x": 0, "y": 0,
+             "props": {"label": "sub", "circuitId": "sub1"}, "ports": []},
+        ],
+        "wires": [],
+        "schematicComponents": {"sub1": {"definition": {"name": "mysub"}, "circuit": sub}},
+    }
+    from ggl.errors import CircuitError
+    with pytest.raises(CircuitError) as ei:
+        view.generate(ggc)
+    assert ei.value.error_code == "portNotFullyConnected"
+    assert ei.value.circuit_name == "mysub"
+    assert ei.value.additional_fields.get("label") == "Y"
+
+
 def test_junction_trunk_resolved_by_geometry_not_stale_index():
     # A junction is a T-tap: a branch wire meets a trunk mid-run at `pos`. The trunk must
     # be found by GEOMETRY (which wire passes through `pos`), not the serialized positional

@@ -418,7 +418,33 @@ def _resolve_connections(wires, junctions, index):
     return conns
 
 
-def _emit_body(components, wires, junctions, circ_var, subdefs, templates, lines, is_top):
+def _validate_interface_connected(components, var_of, conns, circuit_name):
+    """A subcircuit's Input/Output nodes are its interface ports. If one isn't wired to
+    anything inside the subcircuit it never enters the circuit's inputs/outputs, so the
+    Component built from it silently lacks that port — and the *parent's* connect to that
+    port then fails deep in the engine with a bare ``KeyError``. Catch it here, at generation
+    time, with a clear message naming the circuit and the port. (Only subcircuits: a
+    top-level open input/output is a non-fatal 'unused' warning, handled elsewhere.)"""
+    driven = {dvar for (_s, (dvar, _dn), _js) in conns}    # ports something drives (a dst)
+    driving = {svar for ((svar, _sn), _d, _js) in conns}   # ports that drive (a src)
+    for comp in components:
+        t = comp.get("type")
+        if t not in ("input", "output"):
+            continue
+        var = var_of.get(comp.get("id"))
+        if var is None:
+            continue
+        connected = var in driving if t == "input" else var in driven
+        if not connected:
+            label = (comp.get("props", {}) or {}).get("label") or comp.get("id")
+            raise CircuitError(
+                component_id=comp.get("id"), component_type=t, component_label=label,
+                error_code="portNotFullyConnected", circuit_name=circuit_name,
+                port_name=label, label=label)
+
+
+def _emit_body(components, wires, junctions, circ_var, subdefs, templates, lines, is_top,
+               circuit_name=None):
     """Emit node declarations and connect() calls for one circuit (top level or a
     subcircuit body) into ``circ_var``."""
     # A tunnel's direction is derived from its wiring (not the stored prop), and same-label
@@ -454,7 +480,10 @@ def _emit_body(components, wires, junctions, circ_var, subdefs, templates, lines
     lines.extend(value_inits)
 
     index = _port_index(components, var_of, subdefs, tunnel_dirs)
-    for (svar, sname), (dvar, dname), js in _resolve_connections(wires, junctions, index):
+    conns = _resolve_connections(wires, junctions, index)
+    if not is_top:
+        _validate_interface_connected(components, var_of, conns, circuit_name)
+    for (svar, sname), (dvar, dname), js in conns:
         lines.append(
             f'{circ_var}.connect({svar}.output("{sname}"), '
             f'{dvar}.input("{dname}"), js_id="{_esc(js)}")'
@@ -497,12 +526,13 @@ def generate(ggc, mode="run"):
             if child.get("type") == "schematic-component":
                 ensure_template((child.get("props", {}) or {}).get("circuitId"))
         cvar = f"sub_{_san(circuit_id)}"
+        name = subdefs[circuit_id].get('definition', {}).get('name', circuit_id)
         lines.append("")
-        lines.append(f"# subcircuit: {subdefs[circuit_id].get('definition', {}).get('name', circuit_id)}")
+        lines.append(f"# subcircuit: {name}")
         lines.append(f"{cvar} = circuit.Circuit()")
         _emit_body(inner.get("components", []) or [], inner.get("wires", []) or [],
                    inner.get("wireJunctions", []) or [],
-                   cvar, subdefs, templates, lines, is_top=False)
+                   cvar, subdefs, templates, lines, is_top=False, circuit_name=name)
         tvar = f"Tmpl_{_san(circuit_id)}"
         lines.append(f"{tvar} = circuit.Component({cvar})")
         templates[circuit_id] = tvar
@@ -516,7 +546,8 @@ def generate(ggc, mode="run"):
     lines.append("circuit0 = circuit.Circuit()")
     _emit_body(ggc.get("components", []) or [], ggc.get("wires", []) or [],
                ggc.get("wireJunctions", []) or [],
-               "circuit0", subdefs, templates, lines, is_top=True)
+               "circuit0", subdefs, templates, lines, is_top=True,
+               circuit_name=ggc.get("name"))
 
     if mode == "test":
         # Each Test component was declared above (it has no ports, so it took no part in
