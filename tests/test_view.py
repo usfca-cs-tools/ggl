@@ -142,6 +142,19 @@ def test_sequential_circuit_self_checks_via_clocked_test():
     _run(view.generate(ggc, mode="test"))  # no raise => counter reached 5 and COUNT == 5
 
 
+def test_test_async_mode_awaits_cooperative_evaluate():
+    # The browser path (mode="test_async") awaits evaluate_async so a long clocked Test
+    # yields to the event loop; the headless "test" path stays synchronous.
+    src_async = view.generate(_and_with_test([[1, 1, 1]]), mode="test_async")
+    assert ".evaluate_async(circuit0)" in src_async
+    assert "await " in src_async
+
+    src_sync = view.generate(_and_with_test([[1, 1, 1]]), mode="test")
+    assert ".evaluate(circuit0)" in src_sync
+    assert "evaluate_async" not in src_sync
+    assert "await " not in src_sync
+
+
 def test_run_tail_selection():
     ggc = _and_ggc(1, 1)
     assert view.generate(ggc, mode="run").rstrip().endswith("circuit0.run()")

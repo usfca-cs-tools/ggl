@@ -31,6 +31,11 @@ class Circuit:
         self.all_nodes = []
         self.clock: Clock = None
         self.running = False  # set True by run()/run_async()
+        # A user-requested abort. Unlike `running` (which run()/cycle() flip back
+        # on each call), this stays set until a fresh Circuit is built, so it can
+        # halt a multi-step run — e.g. a clocked Test that pulses the clock across
+        # many run()s. stop() sets it; the cooperative test loop consults it.
+        self.stop_requested = False
         # When True, assigning to an Input's .value re-propagates the circuit.
         self.auto_propagate = True
         # Re-entrancy guard so propagation can't trigger nested step()s.
@@ -234,9 +239,13 @@ class Circuit:
         logger.warning(f"Input node {js_id} not found")
 
     def stop(self):
-        """Stop the running circuit simulation"""
+        """Stop the running circuit simulation.
+
+        Sets stop_requested so a cooperative multi-step run (the async test loop)
+        can bail between clock cycles; also clears running for run_async()'s loop."""
         logger.info("Circuit stop() called")
         self.running = False
+        self.stop_requested = True
     
     def connect(self, src, dest, js_id=None):
         """

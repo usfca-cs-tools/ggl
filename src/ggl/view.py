@@ -504,7 +504,11 @@ def generate(ggc, mode="run"):
                           settles (or, for a clocked Test, pulses reset then cycles the clock
                           until the stop output is reached) and checks the expected outputs —
                           a bounded, self-checking run, so it is how a *sequential* circuit is
-                          exercised headlessly.
+                          exercised headlessly (grade.py, pytest, plain exec — synchronous).
+      - ``"test_async"``-> ``await <test>.evaluate_async(circuit0)`` for each Test. The browser
+                          path: same checks as "test", but the cooperative variant yields to the
+                          event loop between clock cycles so a long clocked run keeps the UI
+                          responsive, renders live updates, and can be stopped.
     """
     subdefs = ggc.get("schematicComponents", {}) or {}
     lines = [
@@ -549,12 +553,16 @@ def generate(ggc, mode="run"):
                "circuit0", subdefs, templates, lines, is_top=True,
                circuit_name=ggc.get("name"))
 
-    if mode == "test":
+    if mode in ("test", "test_async"):
         # Each Test component was declared above (it has no ports, so it took no part in
         # connection resolution); evaluate() runs and checks it against the built circuit.
+        # 'test' is the synchronous headless path (grade.py, pytest, plain exec). 'test_async'
+        # is the browser path: await the cooperative variant so a long clocked Test yields to
+        # the event loop (responsive UI, live updates, working Stop) instead of freezing it.
+        call = "await {v}.evaluate_async(circuit0)" if mode == "test_async" else "{v}.evaluate(circuit0)"
         for comp in ggc.get("components", []) or []:
             if comp.get("type") == "test":
-                lines.append(f'{_var(comp["id"])}.evaluate(circuit0)')
+                lines.append(call.format(v=_var(comp["id"])))
     elif mode == "run_async":
         lines.append("await circuit0.run_async()")
     else:

@@ -1,9 +1,18 @@
+import asyncio
+import time
+
 from .node import Node, BitsNode
 from .errors import CircuitError
 from .ggl_logging import new_logger
 from . import callbacks
 
 logger = new_logger(__name__)
+
+# How often the cooperative (browser) test loop yields to the event loop while
+# pulsing a clocked Test. ~30 fps: often enough that the UI stays responsive,
+# live updates render, Stop is honored, and the queued highlight timers drain;
+# rare enough that yielding doesn't dominate a long processor run.
+_TEST_YIELD_INTERVAL_S = 1 / 30
 
 
 class IONode(BitsNode):
@@ -288,16 +297,23 @@ class Test(Node):
             error_code=error_code,
             **fields)
 
-    def evaluate(self, circuit):
-        """Run the truth table one row at a time. On the FIRST problem — a bad
-        column name, a malformed row, or a failing row — restore the circuit's
-        inputs and raise a CircuitError, which the front end surfaces exactly like
-        an open-input or bit-width error (component highlighted + localized
-        message). On success, emit a 'test' pass event (for the badge) and return.
+    def _evaluate_steps(self, circuit):
+        """The truth-table run, as a generator that `yield`s after each clock
+        cycle of a clocked Test — the one place a long run needs a cooperative
+        breather. The two public entry points drive it:
 
-        Surfacing one problem at a time matches the rest of the app's error model.
-        (The aggregate 'report every failing row' behavior that headless grading
-        will want is a planned follow-on.)
+          - evaluate() (headless/CPython) exhausts it, ignoring the yields.
+          - evaluate_async() (browser) yields to the event loop on a throttle and
+            aborts on circuit.stop_requested.
+
+        Because every yield is a point where the generator can be closed, the
+        clocked loop is wrapped so an abort (gen.close() -> GeneratorExit) still
+        restores the circuit to its authored inputs, exactly like a pass/fail.
+
+        On the FIRST problem — a bad column name, a malformed row, or a failing
+        row — it restores and raises a CircuitError, surfaced by the front end
+        exactly like an open-input or bit-width error. On success it emits a
+        'test' pass event (for the badge) and returns the result dict.
         """
         # Resolve columns first; nothing is driven yet, so there's nothing to
         # restore if a name is bad.
@@ -350,56 +366,105 @@ class Test(Node):
         if not rows and (self.stop_enabled or self.reset_enabled):
             rows = [[]]
 
-        for i, row in enumerate(rows, start=1):
-            if len(row) != width:
-                restore()
-                self._raise('testRowWidth', row=i, actual=len(row),
-                            expected=width)
-            in_vals, out_vals = row[:n_in], row[n_in:]
-            drive(zip(in_nodes, in_vals))
-            circuit.run()
-
-            # Reset pulse: assert the reset input, clock it in, then deassert —
-            # so a sequential circuit starts from a known state before the run.
-            if self.reset_enabled:
-                drive([(reset_node, self.reset_value)])
-                for _ in range(self.reset_cycles):
-                    circuit.cycle()
-                drive([(reset_node, 0)])
+        try:
+            for i, row in enumerate(rows, start=1):
+                if len(row) != width:
+                    restore()
+                    self._raise('testRowWidth', row=i, actual=len(row),
+                                expected=width)
+                in_vals, out_vals = row[:n_in], row[n_in:]
+                drive(zip(in_nodes, in_vals))
                 circuit.run()
 
-            # Clocked: pulse the clock until the stop output reaches its value
-            # (or give up), then sample the outputs at that point.
-            stop_desc = ""
-            if self.stop_enabled:
-                cycles = 0
-                while (stop_node.value != self.stop_output_value
-                        and cycles < self.max_cycles):
-                    circuit.cycle()
-                    cycles += 1
-                if stop_node.value != self.stop_output_value:
-                    restore()
-                    self._raise('testStopNotReached',
-                                name=self.stop_output_name,
-                                value=self.stop_output_value,
-                                cycles=self.max_cycles)
-                stop_desc = f"{self.stop_output_name}={self.stop_output_value}"
+                # Reset pulse: assert the reset input, clock it in, then deassert
+                # — so a sequential circuit starts from a known state.
+                if self.reset_enabled:
+                    drive([(reset_node, self.reset_value)])
+                    for _ in range(self.reset_cycles):
+                        circuit.cycle()
+                    drive([(reset_node, 0)])
+                    circuit.run()
 
-            for name, node, expected in zip(
-                    self.output_names, out_nodes, out_vals):
-                actual = node.value
-                if actual != expected:
-                    parts = [f"{n}={v}"
-                             for n, v in zip(self.input_names, in_vals)]
-                    if stop_desc:
-                        parts.append(stop_desc)
-                    in_desc = ", ".join(parts)
-                    restore()
-                    self._raise('testFailed', inputs=in_desc, output=name,
-                                expected=expected, actual=actual)
+                # Clocked: pulse the clock until the stop output reaches its value
+                # (or give up), then sample the outputs at that point.
+                stop_desc = ""
+                if self.stop_enabled:
+                    cycles = 0
+                    while (stop_node.value != self.stop_output_value
+                            and cycles < self.max_cycles):
+                        circuit.cycle()
+                        cycles += 1
+                        yield  # cooperative breather (see evaluate_async)
+                    if stop_node.value != self.stop_output_value:
+                        restore()
+                        self._raise('testStopNotReached',
+                                    name=self.stop_output_name,
+                                    value=self.stop_output_value,
+                                    cycles=self.max_cycles)
+                    stop_desc = f"{self.stop_output_name}={self.stop_output_value}"
+
+                for name, node, expected in zip(
+                        self.output_names, out_nodes, out_vals):
+                    actual = node.value
+                    if actual != expected:
+                        parts = [f"{n}={v}"
+                                 for n, v in zip(self.input_names, in_vals)]
+                        if stop_desc:
+                            parts.append(stop_desc)
+                        in_desc = ", ".join(parts)
+                        restore()
+                        self._raise('testFailed', inputs=in_desc, output=name,
+                                    expected=expected, actual=actual)
+        except GeneratorExit:
+            # evaluate_async closed us mid-run (user hit Stop): leave the circuit
+            # at its authored inputs, same as a normal finish, then unwind.
+            restore()
+            raise
 
         # Every row passed: leave the circuit at its authored inputs and badge it.
         restore()
         logger.info(f"Test '{self.label}' passed")
         callbacks.emit('test', self.js_id, {'label': self.label, 'passed': True})
         return {'label': self.label, 'passed': True}
+
+    def evaluate(self, circuit):
+        """Synchronous run (headless CPython / pytest / the mode='test' codegen).
+
+        Drives _evaluate_steps to completion, ignoring its cooperative yields, so
+        behavior is identical to the pre-cooperative engine: return the result
+        dict, or propagate the CircuitError raised on the first problem.
+        """
+        gen = self._evaluate_steps(circuit)
+        try:
+            while True:
+                next(gen)
+        except StopIteration as done:
+            return done.value
+
+    async def evaluate_async(self, circuit):
+        """Cooperative run for the browser (mode='test_async' codegen).
+
+        Same checks and result as evaluate(), but between clock cycles it yields
+        to the event loop on a throttle so the UI stays responsive, live updates
+        render, the queued highlight timers drain, and a Stop (circuit.stop_requested)
+        is honored — restoring the circuit and returning a 'cancelled' result
+        rather than a pass/fail. Once stop is requested, every remaining Test in
+        the program short-circuits here without touching the circuit.
+        """
+        if circuit.stop_requested:
+            return {'label': self.label, 'passed': None, 'cancelled': True}
+        gen = self._evaluate_steps(circuit)
+        last_yield = time.perf_counter()
+        try:
+            while True:
+                next(gen)
+                if circuit.stop_requested:
+                    gen.close()  # -> GeneratorExit in _evaluate_steps -> restore()
+                    return {'label': self.label, 'passed': None,
+                            'cancelled': True}
+                now = time.perf_counter()
+                if now - last_yield >= _TEST_YIELD_INTERVAL_S:
+                    await asyncio.sleep(0)
+                    last_yield = now
+        except StopIteration as done:
+            return done.value

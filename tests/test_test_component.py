@@ -6,6 +6,8 @@ inputs and bit-width mismatches — and restores the circuit's inputs first. On
 success it emits a 'test' pass event and returns.
 """
 
+import asyncio
+
 import pytest
 
 from ggl import arithmetic, callbacks, circuit, io, logic, memory, plexers
@@ -310,3 +312,55 @@ def test_reset_input_not_found():
         t.evaluate(c)
     assert ei.value.error_code == "testInputNotFound"
     assert ei.value.to_dict()["name"] == "NOPE"
+
+
+# --- Cooperative (browser) path: evaluate_async ---------------------------------
+# evaluate() (headless) and evaluate_async() (browser) share one generator, so they
+# must agree; evaluate_async additionally yields between clock cycles and honors a
+# mid-run Stop (circuit.stop_requested), restoring the circuit like a normal finish.
+
+def _clocked_test():
+    return io.Test(label="run", js_id="t1",
+                   input_names=["B"], output_names=["count"], rows=[[100, 103]],
+                   reset_enabled=True, reset_input_name="CLR",
+                   stop_enabled=True, stop_output_name="count", stop_output_value=103)
+
+
+def test_evaluate_async_matches_evaluate_for_clocked_test():
+    sync_result = _clocked_test().evaluate(make_loadable_counter())
+    async_result = asyncio.run(_clocked_test().evaluate_async(make_loadable_counter()))
+    assert async_result["passed"] is True
+    assert async_result == sync_result
+
+
+def test_evaluate_async_returns_cancelled_when_already_stopped():
+    c = make_loadable_counter()
+    c.stop()  # a Stop that arrived before this Test's turn
+    result = asyncio.run(_clocked_test().evaluate_async(c))
+    assert result["cancelled"] is True
+    assert result["passed"] is None
+
+
+def test_evaluate_async_stop_mid_run_cancels_and_restores(monkeypatch):
+    # Yield every cycle so a concurrent Stop interleaves deterministically.
+    monkeypatch.setattr(io, "_TEST_YIELD_INTERVAL_S", 0)
+    c = make_loadable_counter()
+    b = next(n for n in c.inputs if n.label == "B")
+    b.value = 7  # authored input, to prove restore() returns to it after abort
+    # A stop value the 8-bit counter never reaches, so without the Stop it would
+    # run to the max_cycles cap.
+    t = io.Test(label="run", js_id="t1",
+                input_names=["B"], output_names=["count"], rows=[[100, 999]],
+                reset_enabled=True, reset_input_name="CLR",
+                stop_enabled=True, stop_output_name="count", stop_output_value=999)
+
+    async def scenario():
+        task = asyncio.create_task(t.evaluate_async(c))
+        for _ in range(3):       # let it pulse a few cycles...
+            await asyncio.sleep(0)
+        c.stop()                 # ...then request Stop mid-run
+        return await task
+
+    result = asyncio.run(scenario())
+    assert result["cancelled"] is True
+    assert b.value == 7  # restored to the authored value, not the row's 100
