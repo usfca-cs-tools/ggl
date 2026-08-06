@@ -194,28 +194,25 @@ class Node:
 
     def __getattribute__(self, name):
         """
-        Enable attribute-style access to inputs and outputs.
+        Enable attribute-style access to inputs and outputs, with port names taking
+        priority over class attributes (so adder.a is the 'a' port, not the class
+        constant Adder.a == 'a').
         Examples: mux.sel instead of mux.input("sel"), adder.sum instead of adder.output("sum")
 
-        Port names take priority over class attributes.
+        This runs on EVERY attribute access, so it is kept lean: one __dict__ fetch and
+        an O(1) dict-membership test per port map — no get_names()/keys() view built per
+        access, which previously dominated simulation time. Reads inputs/outputs from
+        __dict__ so an access during construction (before they're set) can't recurse.
         """
-        # Check if this is a port name first (prioritize ports over attributes)
-        try:
-            # This wonky syntax is required to prevent infinite recursion on
-            # self.inputs calling self.__getattribute__()
-            inputs = object.__getattribute__(self, 'inputs')
-            outputs = object.__getattribute__(self, 'outputs')
-
-            if name in inputs.get_names():
-                return Connector(self, name)
-            elif name in outputs.get_names():
-                return Connector(self, name)
-        except AttributeError:
-            # During construction, inputs/outputs might not exist yet
-            pass
-
-        # Not a port name, use normal attribute access
-        return object.__getattribute__(self, name)
+        ga = object.__getattribute__
+        d = ga(self, '__dict__')
+        inputs = d.get('inputs')
+        if inputs is not None and name in inputs.points:
+            return Connector(self, name)
+        outputs = d.get('outputs')
+        if outputs is not None and name in outputs.points:
+            return Connector(self, name)
+        return ga(self, name)
 
     def propagate(self, output_name='0', value=0, bits=0):
         """
