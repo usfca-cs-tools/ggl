@@ -33,7 +33,8 @@ def test_settle_delivers_one_batch_to_registered_callback():
     assert len(calls) == 1
     event, cid, payload = calls[0]
     assert event == "batch"
-    assert ["value", "out_1", 0] in json.loads(payload)
+    # Value is emitted as a string so >2**53 values survive the JS JSON round-trip exactly.
+    assert ["value", "out_1", "0"] in json.loads(payload)
 
 
 def test_edge_step_carries_bus_value_and_bits():
@@ -51,7 +52,7 @@ def test_edge_step_carries_bus_value_and_bits():
 
     updates = json.loads(calls[0][2])
     step = next(u for u in updates if u[0] == "step" and u[1] == "wire_1")
-    assert step[2]["value"] == 10
+    assert step[2]["value"] == "10"  # string-encoded for exact 64-bit round-trip
     assert step[2]["bits"] == 4
 
 

@@ -89,8 +89,11 @@ class Edge:
         # Carry the numeric value and bit width too, so the UI can show what a bus is
         # propagating on hover (issue #133). 'active' stays value==1 for the existing
         # high/low wire coloring; value/bits are additive.
+        # value as a string so a >2**53 bus value survives the JSON round-trip exactly (BigInt on
+        # the UI side); 'active' stays a bool for wire coloring.
         callbacks.emit('step', self.js_id,
-                       {'active': value == 1, 'style': 'processing', 'value': value, 'bits': bits})
+                       {'active': value == 1, 'style': 'processing',
+                        'value': str(value), 'bits': bits})
 
         self.prev_value = self.value
         self.value = value

@@ -137,7 +137,10 @@ class Output(IONode):
     def propagate(self, output_name='0', value=0):
         self.value = self.safe_read_input('0')
         logger.info(f"{self.kind} '{self.label}' gets value {self.value}")
-        callbacks.emit('value', self.js_id, self.value)
+        # Emit as a string: a 64-bit value exceeds JS Number's exact range (2**53) and it crosses
+        # to the UI via json.dumps -> JSON.parse. A string survives exactly; the UI parses it with
+        # BigInt. (RV64 needs full 64-bit display, e.g. -1 == 0xFFFFFFFFFFFFFFFF.)
+        callbacks.emit('value', self.js_id, str(self.value))
 
 
 class ChildOutput(Output):
