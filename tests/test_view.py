@@ -313,6 +313,7 @@ def test_counter_no_subcircuits_counts_when_clocked():
     ({"type": "divide", "props": {"label": "/", "bits": 8}}, "Division"),
     ({"type": "compare", "props": {"label": "=", "bits": 8}}, "Comparator"),
     ({"type": "shift", "props": {"label": "<<", "bits": 8, "mode": "arithmetic_right"}}, "BarrelShifter"),
+    ({"type": "signExtend", "props": {"label": "SE", "inBits": 8, "outBits": 16}}, "SignExtend"),
     ({"type": "multiplexer", "props": {"label": "M", "selectorBits": 2, "bits": 4}}, "Multiplexer"),
     ({"type": "decoder", "props": {"label": "D", "selectorBits": 3}}, "Decoder"),
     ({"type": "priorityEncoder", "props": {"label": "PE", "selectorBits": 2}}, "PriorityEncoder"),

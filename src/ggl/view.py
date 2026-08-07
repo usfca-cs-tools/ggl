@@ -137,6 +137,11 @@ def _component_expr(comp, tunnel_dir=None):
         shift_mode = "arithmetic" if "arithmetic" in m else "logical"
         return (f'arithmetic.BarrelShifter(label="{_esc(label)}", bits={bits}, '
                 f'direction="{direction}", mode="{shift_mode}", js_id="{_esc(js_id)}")', None)
+    if t == "signExtend":
+        # Distinct input/output widths (in_bits/out_bits), not the shared `bits`.
+        in_bits, out_bits = int(p.get("inBits", 1)), int(p.get("outBits", 1))
+        return (f'arithmetic.SignExtend(label="{_esc(label)}", in_bits={in_bits}, '
+                f'out_bits={out_bits}, js_id="{_esc(js_id)}")', None)
 
     # --- plexers ---
     if t == "multiplexer":
