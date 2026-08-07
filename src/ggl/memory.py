@@ -129,7 +129,9 @@ class Addressable(BitsNode):
                 f'Addressable value {val} overflows {self.data_bits} bits')
             val &= self.mask()
         self.memory[addr] = val
-        callbacks.emit('memory', self.js_id, {'address': addr, 'value': val})
+        # value as a string so a 64-bit cell survives the JS JSON round-trip exactly (BigInt on the
+        # UI side); address stays an int (<= 16-bit address space).
+        callbacks.emit('memory', self.js_id, {'address': addr, 'value': str(val)})
 
 
 class ROM(Addressable):
