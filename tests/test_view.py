@@ -492,6 +492,38 @@ def test_tunnel_net_carries_value_across(value):
     assert _output(ns, "Y").value == value
 
 
+def test_tunnel_subscriber_uses_driver_width_not_its_own():
+    # A tunnel net is a named wire: its width is the driver's. A subscriber tunnel left at
+    # the default bits=1 (a common oversight) must NOT mask the value down to one bit at the
+    # far end. Here a 3-bit driver publishes 5 (0b101) through a bits=1 subscriber; the value
+    # must arrive intact (5), not truncated to its low bit (1). Regresses the missing bus
+    # width — which also silently broke the bus-value hover tooltip on the subscriber's wire.
+    ggc = {
+        "version": "1.4",
+        "components": [
+            {"id": "A", "type": "input", "x": 0, "y": 0,
+             "props": {"label": "A", "bits": 3, "value": 5},
+             "ports": [{"name": "0", "x": 1, "y": 0, "direction": "output"}]},
+            {"id": "TP", "type": "tunnel", "x": 3, "y": 0,
+             "props": {"label": "N", "bits": 3, "direction": "input"},
+             "ports": [{"name": "0", "x": 0, "y": 0, "direction": "input"}]},
+            {"id": "TS", "type": "tunnel", "x": 5, "y": 0,
+             "props": {"label": "N", "bits": 1, "direction": "output"},  # default width, narrower
+             "ports": [{"name": "0", "x": 0, "y": 0, "direction": "output"}]},
+            {"id": "Y", "type": "output", "x": 7, "y": 0,
+             "props": {"label": "Y", "bits": 3},
+             "ports": [{"name": "0", "x": 0, "y": 0, "direction": "input"}]},
+        ],
+        "wires": [
+            {"id": "w1", "startConnection": {"pos": {"x": 1, "y": 0}, "portType": "output"},
+             "endConnection": {"pos": {"x": 3, "y": 0}, "portType": "input"}},
+            {"id": "w2", "startConnection": {"pos": {"x": 5, "y": 0}, "portType": "output"},
+             "endConnection": {"pos": {"x": 7, "y": 0}, "portType": "input"}},
+        ],
+    }
+    assert _output(_run(view.generate(ggc)), "Y").value == 5
+
+
 def test_tunnel_direction_is_inferred_not_stored():
     # Both tunnels carry the WRONG stored direction ("input"); ggl.view must infer from
     # wiring — the one fed by A is the publisher (input), the one driving Y is the

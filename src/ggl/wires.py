@@ -129,16 +129,19 @@ class Tunnel(WireNode):
             input_value = self.safe_read_input('0', bits=self.bits)
             logger.info(f'{self.kind} {self.label} (input): propagating {bin(input_value)} to linked output tunnels')
 
+            # A tunnel net is just a named wire, so its width is the driver's (this input
+            # tunnel's), not each output tunnel's own prop — which defaults to 1 and would
+            # otherwise mask the value down to a single bit at the far end.
             for tunnel in Tunnel.tunnel_history.get(self.label, []):
                 if tunnel is not self and tunnel.is_output_tunnel():
-                    work += tunnel.receive(input_value)
+                    work += tunnel.receive(input_value, self.bits)
         except Exception:
             pass
 
         return work
 
-    def receive(self, value):
+    def receive(self, value, bits=None):
         if self.direction != 'output':
             logger.warning(f'{self.kind} {self.label}: receive() called on non-output tunnel')
             return []
-        return super().propagate(output_name='0', value=value)
+        return super().propagate(output_name='0', value=value, bits=bits)
