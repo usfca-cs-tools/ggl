@@ -70,8 +70,12 @@ class Circuit:
                 try:
                     new_work = node.propagate()
                 except CircuitError as e:
-                    # Add circuit context if the error doesn't already carry it
-                    if not e.circuit_name and self.circuit_name:
+                    # Add circuit context if the error doesn't already carry it. Prefer the
+                    # failing node's own circuit (tagged when a subcircuit's nodes are cloned
+                    # into this one) so a nested error names the subcircuit it occurred in,
+                    # not the flattened top-level circuit.
+                    ctx_name = getattr(node, 'circuit_name', None) or self.circuit_name
+                    if not e.circuit_name and ctx_name:
                         raise CircuitError(
                             component_id=e.component_id,
                             component_type=e.component_type,
@@ -80,7 +84,7 @@ class Circuit:
                             severity=e.severity,
                             port_name=e.port_name,
                             connected_component_id=e.connected_component_id,
-                            circuit_name=self.circuit_name,
+                            circuit_name=ctx_name,
                             **e.additional_fields
                         ) from e
                     raise

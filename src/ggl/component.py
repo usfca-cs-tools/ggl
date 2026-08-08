@@ -67,6 +67,9 @@ class CircuitNode(Node):
         # Clone all nodes with unique labels
         for template_node in template.all_nodes:
             cloned_node = template_node.clone(instance_id)
+            # Tag each node with the subcircuit it lives in, so an error raised while
+            # propagating it names that subcircuit rather than the flattened top circuit.
+            cloned_node.circuit_name = template.circuit_name
             node_map[template_node] = cloned_node
             cloned_circuit.all_nodes.append(cloned_node)
 

@@ -243,6 +243,69 @@ def test_unconnected_subcircuit_output_raises_clear_error():
     assert ei.value.additional_fields.get("label") == "Y"
 
 
+@pytest.mark.parametrize("nest,expected", [(False, "main"), (True, "widener")])
+def test_runtime_error_names_the_circuit_it_occurred_in(nest, expected):
+    # A bit-width mismatch raised while settling must name the circuit it happened in. A
+    # subcircuit is flattened into its parent at run time, so the offending node is tagged
+    # with its own circuit: a top-level mismatch reports "main", the SAME mismatch moved
+    # into a subcircuit reports "widener" (the innermost circuit), not the flattened top.
+    def port(n, x, y, d):
+        return {"name": n, "x": x, "y": y, "direction": d}
+
+    # A splitter declaring 8 input bits but fed a 4-bit source -> bitWidthMismatch on settle.
+    # `source` is the node that feeds the splitter: a self-contained top-level circuit drives
+    # it with a constant; the subcircuit exposes an interface input A that the parent feeds.
+    def mismatch_body(source, source_out_x):
+        return {
+            "components": [
+                source,
+                {"id": "SP", "type": "splitter", "x": 3, "y": 0,
+                 "props": {"label": "SP", "inputBits": 8, "ranges": [{"start": 0, "end": 7}]},
+                 "ports": [port("0", 0, 0, "input"), port("0", 2, 0, "output")]},
+                {"id": "OUT", "type": "output", "x": 8, "y": 0, "props": {"label": "Y", "bits": 8},
+                 "ports": [port("0", 0, 0, "input")]},
+            ],
+            "wires": [
+                {"startConnection": {"pos": {"x": source_out_x, "y": 0}}, "endConnection": {"pos": {"x": 3, "y": 0}}},
+                {"startConnection": {"pos": {"x": 5, "y": 0}}, "endConnection": {"pos": {"x": 8, "y": 0}}},
+            ],
+        }
+
+    if nest:
+        # Subcircuit "widener": interface input A(4) -> splitter(8) -> output Y; the parent
+        # drives A with a 4-bit constant, so the mismatch fires inside the subcircuit.
+        sub_in = {"id": "A", "type": "input", "x": 0, "y": 0, "props": {"label": "A", "bits": 4},
+                  "ports": [port("0", 1, 0, "output")]}
+        ggc = {
+            "name": "main", "version": "1.4",
+            "schematicComponents": {
+                "w": {"definition": {"name": "widener"}, "circuit": mismatch_body(sub_in, 1)}},
+            "components": [
+                {"id": "K", "type": "constant", "x": -3, "y": 0,
+                 "props": {"label": "K", "value": "5", "bits": 4}, "ports": [port("0", 1, 0, "output")]},
+                {"id": "SC", "type": "schematic-component", "x": 0, "y": 0,
+                 "props": {"label": "W", "circuitId": "w"},
+                 "ports": [port("A", 0, 0, "input"), port("Y", 2, 0, "output")]},
+                {"id": "TOUT", "type": "output", "x": 8, "y": 0, "props": {"label": "Out", "bits": 8},
+                 "ports": [port("0", 0, 0, "input")]},
+            ],
+            "wires": [
+                {"startConnection": {"pos": {"x": -2, "y": 0}}, "endConnection": {"pos": {"x": 0, "y": 0}}},
+                {"startConnection": {"pos": {"x": 2, "y": 0}}, "endConnection": {"pos": {"x": 8, "y": 0}}},
+            ],
+        }
+    else:
+        const = {"id": "C", "type": "constant", "x": 0, "y": 0,
+                 "props": {"label": "C", "value": "5", "bits": 4}, "ports": [port("0", 1, 0, "output")]}
+        ggc = {"name": "main", "version": "1.4", **mismatch_body(const, 1)}
+
+    from ggl.errors import CircuitError
+    with pytest.raises(CircuitError) as ei:
+        exec(compile(view.generate(ggc, mode="run"), "<gen>", "exec"), {})
+    assert ei.value.error_code == "bitWidthMismatch"
+    assert ei.value.circuit_name == expected
+
+
 def test_junction_trunk_resolved_by_geometry_not_stale_index():
     # A junction is a T-tap: a branch wire meets a trunk mid-run at `pos`. The trunk must
     # be found by GEOMETRY (which wire passes through `pos`), not the serialized positional

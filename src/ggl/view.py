@@ -538,7 +538,7 @@ def generate(ggc, mode="run"):
         name = subdefs[circuit_id].get('definition', {}).get('name', circuit_id)
         lines.append("")
         lines.append(f"# subcircuit: {name}")
-        lines.append(f"{cvar} = circuit.Circuit()")
+        lines.append(f'{cvar} = circuit.Circuit(circuit_name="{_esc(name)}")')
         _emit_body(inner.get("components", []) or [], inner.get("wires", []) or [],
                    inner.get("wireJunctions", []) or [],
                    cvar, subdefs, templates, lines, is_top=False, circuit_name=name)
@@ -552,7 +552,12 @@ def generate(ggc, mode="run"):
             ensure_template((comp.get("props", {}) or {}).get("circuitId"))
 
     lines.append("")
-    lines.append("circuit0 = circuit.Circuit()")
+    top_name = ggc.get("name")
+    lines.append(
+        f'circuit0 = circuit.Circuit(circuit_name="{_esc(top_name)}")'
+        if top_name
+        else "circuit0 = circuit.Circuit()"
+    )
     _emit_body(ggc.get("components", []) or [], ggc.get("wires", []) or [],
                ggc.get("wireJunctions", []) or [],
                "circuit0", subdefs, templates, lines, is_top=True,
