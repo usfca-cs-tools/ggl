@@ -114,7 +114,7 @@ def _component_expr(comp, tunnel_dir=None):
         # publishes to the net -> input; one that drives a sink reads from it -> output), not
         # from the stored prop. Same-label tunnels are joined inside the engine.
         direction = tunnel_dir if tunnel_dir is not None else p.get("direction", "input")
-        return (f'wires.Tunnel(label="{_esc(label)}", bits={bits}, '
+        return (f'wires.Tunnel(label="{_esc(label)}", '
                 f'direction="{_esc(direction)}", js_id="{_esc(js_id)}")', None)
 
     # --- arithmetic ---

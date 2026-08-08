@@ -92,14 +92,16 @@ class Tunnel(WireNode):
     kind = 'Tunnel'
     tunnel_history = {}
 
-    def __init__(self, js_id='', label='', bits=1, direction='input', **kwargs):
+    def __init__(self, js_id='', label='', direction='input', **kwargs):
+        # A tunnel is a named wire and has no width of its own — it carries whatever the
+        # net's driver produces. (A stray `bits` from an older .ggc lands in **kwargs and
+        # is ignored.)
         super().__init__(
             Tunnel.kind,
             js_id=js_id,
             num_inputs=1 if direction == 'input' else 0,
             num_outputs=1 if direction == 'output' else 0,
-            label=label,
-            bits=bits
+            label=label
         )
 
         self.direction = direction
@@ -120,27 +122,24 @@ class Tunnel(WireNode):
         return self.direction == 'output'
     
     def propagate(self, output_name='0', value=0):
-        if not self.label:
+        if not self.label or self.direction != 'input':
             return []
 
+        # Read the driving edge at whatever width the driver produced and republish that to
+        # every same-label subscriber. The tunnel imposes no width of its own, so the value
+        # crosses intact; a genuine width mismatch surfaces where the net is finally read.
+        edge = self.inputs.get_edge('0')
+        if edge is None or edge.bits is None:
+            return []  # the net has no driver yet on this pass
+
+        logger.info(f'{self.kind} {self.label} (input): publishing {bin(edge.value)} ({edge.bits} bits)')
         work = []
-
-        try:
-            input_value = self.safe_read_input('0', bits=self.bits)
-            logger.info(f'{self.kind} {self.label} (input): propagating {bin(input_value)} to linked output tunnels')
-
-            # A tunnel net is just a named wire, so its width is the driver's (this input
-            # tunnel's), not each output tunnel's own prop — which defaults to 1 and would
-            # otherwise mask the value down to a single bit at the far end.
-            for tunnel in Tunnel.tunnel_history.get(self.label, []):
-                if tunnel is not self and tunnel.is_output_tunnel():
-                    work += tunnel.receive(input_value, self.bits)
-        except Exception:
-            pass
-
+        for tunnel in Tunnel.tunnel_history.get(self.label, []):
+            if tunnel is not self and tunnel.is_output_tunnel():
+                work += tunnel.receive(edge.value, edge.bits)
         return work
 
-    def receive(self, value, bits=None):
+    def receive(self, value, bits):
         if self.direction != 'output':
             logger.warning(f'{self.kind} {self.label}: receive() called on non-output tunnel')
             return []

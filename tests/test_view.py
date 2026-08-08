@@ -492,12 +492,12 @@ def test_tunnel_net_carries_value_across(value):
     assert _output(ns, "Y").value == value
 
 
-def test_tunnel_subscriber_uses_driver_width_not_its_own():
-    # A tunnel net is a named wire: its width is the driver's. A subscriber tunnel left at
-    # the default bits=1 (a common oversight) must NOT mask the value down to one bit at the
-    # far end. Here a 3-bit driver publishes 5 (0b101) through a bits=1 subscriber; the value
-    # must arrive intact (5), not truncated to its low bit (1). Regresses the missing bus
-    # width — which also silently broke the bus-value hover tooltip on the subscriber's wire.
+def test_tunnel_carries_driver_width_ignoring_any_stored_bits():
+    # A tunnel is a named wire with no width of its own — the net's width is the driver's.
+    # ggl.view no longer emits a `bits` arg for tunnels, and a stray `bits` left in an older
+    # .ggc must be ignored (not used to mask). Here a 3-bit driver publishes 5 (0b101) while
+    # the subscriber tunnel still carries a stale bits=1; the value must arrive intact (5),
+    # not truncated to its low bit (1) — which also restores the subscriber wire's bus tooltip.
     ggc = {
         "version": "1.4",
         "components": [
@@ -521,7 +521,10 @@ def test_tunnel_subscriber_uses_driver_width_not_its_own():
              "endConnection": {"pos": {"x": 7, "y": 0}, "portType": "input"}},
         ],
     }
-    assert _output(_run(view.generate(ggc)), "Y").value == 5
+    src = view.generate(ggc)
+    tunnel_lines = [ln for ln in src.splitlines() if "wires.Tunnel(" in ln]
+    assert tunnel_lines and all("bits=" not in ln for ln in tunnel_lines)  # no width declared
+    assert _output(_run(src), "Y").value == 5
 
 
 def test_tunnel_direction_is_inferred_not_stored():
