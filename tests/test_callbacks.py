@@ -75,3 +75,21 @@ def test_callback_registered_after_import_is_still_seen():
     callbacks.emit("value", "x", 1)
     callbacks.flush_batch()
     assert seen and seen[0][0] == "batch"
+
+
+def test_addressable_construction_emits_no_memory_events():
+    # Zero-initializing memory must not emit a 'memory' event per cell. A ROM is read-only
+    # and never writes at run time, so those construction emits were pure noise the frontend
+    # rejected as "memory update for non-RAM component". Only genuine runtime writes emit.
+    from ggl import memory
+
+    events = []
+    callbacks.set_callback(lambda event, cid, payload: events.append((event, cid)))
+    rom = memory.ROM(js_id="rom_1", address_bits=4, data_bits=19, data=[3, 5, 7])
+    ram = memory.RAM(js_id="ram_1", address_bits=4, data_bits=8)
+
+    assert [e for e in events if e[0] == "memory"] == []
+    assert rom.memory[:3] == [3, 5, 7]  # ROM data still loaded
+
+    ram.write_address(2, 42)  # a runtime store still emits
+    assert ("memory", "ram_1") in events

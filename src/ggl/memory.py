@@ -101,9 +101,10 @@ class Addressable(BitsNode):
         self.data_bits = data_bits
         self.total_cells = 2 ** address_bits
         self.max_value = (2 ** data_bits) - 1
-        self.memory = [None] * self.total_cells
-        for c in range(self.total_cells):
-            self.write_address(c, 0)
+        # Zero-initialize directly, not via write_address: that emits a 'memory' event per
+        # cell, which for a ROM (read-only, never writes at run time) floods the UI with
+        # spurious updates the frontend then rejects as "memory update for non-RAM component".
+        self.memory = [0] * self.total_cells
 
 
     def calc_address(self):
