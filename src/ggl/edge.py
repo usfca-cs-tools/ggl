@@ -15,6 +15,13 @@ logger = new_logger(__name__)
 # Circuit.step() turns this flag off for the duration of a step.
 gate_on_change = True
 
+# Set by Edge.propagate during a synchronous step whenever an edge's value actually changes.
+# Circuit.step() resets this before a pass and returns it as the pass's "did anything change?"
+# result — the circuit's fixpoint is judged on wires, not nodes. A combinational node (shift,
+# mux, adder, …) writes only to edges, never to self.value, so a node-value test would call the
+# circuit settled while wires are still in flight.
+values_changed = False
+
 
 class EdgePoint:
     """
@@ -85,6 +92,12 @@ class Edge:
         # (only when the active engine relies on change-gating; see gate_on_change)
         if gate_on_change and self.value == value and self.prev_value is not None:
             return []
+
+        # In a synchronous step (change-gating off), record whether this is a real change so
+        # settle() keeps iterating until every edge is stable, not just until state nodes are.
+        if not gate_on_change and (self.prev_value is None or self.value != value):
+            global values_changed
+            values_changed = True
 
         # Carry the numeric value and bit width too, so the UI can show what a bus is
         # propagating on hover (issue #133). 'active' stays value==1 for the existing

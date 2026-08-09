@@ -49,15 +49,19 @@ class Circuit:
         """
         Perform one synchronous propagation pass: seed the work queue with the
         circuit's inputs (the clock is an ordinary input) and propagate, each
-        node firing at most once. Returns True if any node's value changed, so
-        settle() can tell whether a fixpoint has been reached.
+        node firing at most once. Returns True if any WIRE changed value, so
+        settle() can tell whether a fixpoint has been reached. Convergence is
+        judged on wires, not nodes: a combinational node (shift, mux, adder, …)
+        writes only to its output edges, never to self.value, so a node-value
+        test would call the circuit settled while wires are still in flight.
         """
         self._in_step = True
         # The synchronous engine bounds cycles with the visited set below, so
-        # edges must always forward their value during a step.
+        # edges must always forward their value during a step. Edge.propagate sets
+        # values_changed whenever a wire actually changes; that is our fixpoint signal.
         prev_gating = edge_module.gate_on_change
         edge_module.gate_on_change = False
-        changed = False
+        edge_module.values_changed = False
         try:
             work = deque(self.inputs)
             visited = set()
@@ -66,7 +70,6 @@ class Circuit:
                 if node in visited:
                     continue
                 visited.add(node)
-                before = getattr(node, 'value', None)
                 try:
                     new_work = node.propagate()
                 except CircuitError as e:
@@ -88,8 +91,6 @@ class Circuit:
                             **e.additional_fields
                         ) from e
                     raise
-                if getattr(node, 'value', None) != before:
-                    changed = True
                 if new_work:
                     for n in new_work:
                         if n not in visited:
@@ -97,16 +98,16 @@ class Circuit:
         finally:
             edge_module.gate_on_change = prev_gating
             self._in_step = False
-        return changed
+        return edge_module.values_changed
 
     def settle(self):
         """
-        Propagate until a full pass changes no node's value — the circuit's
+        Propagate until a full pass changes no wire's value — the circuit's
         fixpoint for the current (static) inputs.
 
-        step() reports whether anything changed; we repeat until it doesn't.
-        Watching every node, not just the outputs, avoids stopping while an
-        internal value is still in flight toward the outputs. Side-effect free
+        step() reports whether any wire changed; we repeat until none does.
+        Judging on wires, not nodes, avoids stopping while a combinational
+        value is still in flight toward the outputs. Side-effect free
         (does not change `running` or advance the clock), so it is safe to call
         any time. The cap scales with circuit size so a deep-but-stable circuit
         isn't falsely flagged; reaching it means the circuit never settles

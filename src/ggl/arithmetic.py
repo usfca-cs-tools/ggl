@@ -235,7 +235,11 @@ class BarrelShifter(Arithmetic):
 
     def propagate(self, output_name='0', value=0):
         a = self.safe_read_input(BarrelShifter.a)
-        b = self.safe_read_input(BarrelShifter.b)
+        # The shift amount is just a count, so read it at its OWN width, not the data width:
+        # a narrow amount bus (e.g. the low bits split off a wide operand) must neither trip a
+        # bit-width mismatch nor be misread. self.bits stays the width of the data and result.
+        amt_edge = self.inputs.get_edge(BarrelShifter.b)
+        b = self.safe_read_input(BarrelShifter.b, bits=amt_edge.bits if amt_edge else None)
         v = self.operator(a, b)
         new_work = super().propagate(output_name=BarrelShifter.result, value=v)
         return new_work
