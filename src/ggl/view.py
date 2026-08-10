@@ -185,6 +185,9 @@ def _component_expr(comp, tunnel_dir=None):
                 "stop_enabled=True",
                 f'stop_output_name="{_esc(p.get("stop_output_name", ""))}"',
                 f'stop_output_value={int(p.get("stop_output_value") or 0)}',
+                # Cap on how long a stuck clocked test waits before failing. Default 1000
+                # (matches io.Test) so an unreached stop condition surfaces quickly.
+                f'max_cycles={int(p.get("max_cycles") or 1000)}',
             ]
         if p.get("reset_enabled"):
             args += [

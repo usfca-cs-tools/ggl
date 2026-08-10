@@ -263,7 +263,7 @@ class Test(Node):
 
     def __init__(self, label='', js_id='', input_names=None, output_names=None,
                  rows=None, stop_enabled=False, stop_output_name='',
-                 stop_output_value=1, max_cycles=10000,
+                 stop_output_value=1, max_cycles=1000,
                  reset_enabled=False, reset_input_name='', reset_value=1,
                  reset_cycles=1):
         # list(... or []) copies and avoids the shared-mutable-default footgun.
@@ -271,8 +271,9 @@ class Test(Node):
         self.output_names = list(output_names or [])
         self.rows = [list(r) for r in (rows or [])]
         # Clocked mode: pulse the clock until an output reaches a value, then
-        # check the expected outputs. max_cycles is a safety cap (not surfaced in
-        # the UI); the other three are set from the property panel.
+        # check the expected outputs. max_cycles caps how long a stuck test waits
+        # before failing with testStopNotReached — it's set from the property panel
+        # (default 1000); the other stop_* fields come from there too.
         self.stop_enabled = bool(stop_enabled)
         self.stop_output_name = stop_output_name or ''
         self.stop_output_value = stop_output_value

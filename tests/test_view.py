@@ -142,6 +142,24 @@ def test_sequential_circuit_self_checks_via_clocked_test():
     _run(view.generate(ggc, mode="test"))  # no raise => counter reached 5 and COUNT == 5
 
 
+def test_clocked_test_emits_max_cycles():
+    # max_cycles caps how long a stuck clocked test waits before failing. It's authored in the
+    # Test properties and flows through codegen so the editor and grader use the same cap.
+    def _ggc(props_extra):
+        return {"name": "c", "wires": [], "components": [{
+            "id": "T", "type": "test", "x": 0, "y": 0, "ports": [],
+            "props": {"label": "t", "table": {"inputNames": [], "outputNames": [], "rows": []},
+                      "stop_enabled": True, "stop_output_name": "D", "stop_output_value": 1,
+                      **props_extra},
+        }]}
+
+    assert "max_cycles=250" in view.generate(_ggc({"max_cycles": 250}), mode="test")
+    # Absent -> default 1000 (matches io.Test), so a stuck test fails quickly.
+    assert "max_cycles=1000" in view.generate(_ggc({}), mode="test")
+    # A combinational Test (no stop condition) never runs the clock, so no cap is emitted.
+    assert "max_cycles" not in view.generate(_ggc({"stop_enabled": False}), mode="test")
+
+
 def test_test_async_mode_awaits_cooperative_evaluate():
     # The browser path (mode="test_async") awaits evaluate_async so a long clocked Test
     # yields to the event loop; the headless "test" path stays synchronous.
