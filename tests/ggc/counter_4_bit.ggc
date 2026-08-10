@@ -2673,7 +2673,7 @@
             {
               "id": "input_4_1767645421121",
               "label": "CLK",
-              "bits": 4
+              "bits": 1
             },
             {
               "id": "input_5_1767645430228",
@@ -3104,7 +3104,7 @@
             "y": 5,
             "props": {
               "base": 10,
-              "bits": 4,
+              "bits": 1,
               "rotation": 0,
               "label": "CLK"
             },

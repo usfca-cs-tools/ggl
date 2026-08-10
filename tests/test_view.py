@@ -243,6 +243,52 @@ def test_unconnected_subcircuit_output_raises_clear_error():
     assert ei.value.additional_fields.get("label") == "Y"
 
 
+def test_subcircuit_input_width_mismatch_raises():
+    # A subcircuit input port must be driven at its own width. A wider signal (e.g. a 64-bit
+    # PC into an 8-bit ROM address port) would otherwise be silently masked at the boundary,
+    # hiding a real wiring mistake. It must raise, naming the port, both widths, and the
+    # subcircuit the port lives in.
+    sub = {
+        "circuit": {
+            "components": [
+                {"id": "A", "type": "input", "x": 0, "y": 0, "props": {"label": "ADDR", "bits": 8},
+                 "ports": [{"name": "0", "x": 1, "y": 0, "direction": "output"}]},
+                {"id": "D", "type": "output", "x": 4, "y": 0, "props": {"label": "D", "bits": 8},
+                 "ports": [{"name": "0", "x": 0, "y": 0, "direction": "input"}]},
+            ],
+            "wires": [{"id": "w", "startConnection": {"pos": {"x": 1, "y": 0}},
+                       "endConnection": {"pos": {"x": 4, "y": 0}}}],
+        },
+        "definition": {"name": "instr-mem"},
+    }
+    ggc = {
+        "version": "1.4", "name": "top", "schematicComponents": {"m": sub},
+        "components": [
+            {"id": "PC", "type": "input", "x": 0, "y": 0, "props": {"label": "PC", "bits": 64, "value": 8},
+             "ports": [{"name": "0", "x": 1, "y": 0, "direction": "output"}]},
+            {"id": "SC", "type": "schematic-component", "x": 3, "y": 0,
+             "props": {"label": "MEM", "circuitId": "m"},
+             "ports": [{"name": "ADDR", "x": 0, "y": 0, "direction": "input"},
+                       {"name": "D", "x": 2, "y": 0, "direction": "output"}]},
+            {"id": "OUT", "type": "output", "x": 8, "y": 0, "props": {"label": "OUT", "bits": 8},
+             "ports": [{"name": "0", "x": 0, "y": 0, "direction": "input"}]},
+        ],
+        "wires": [
+            {"id": "w1", "startConnection": {"pos": {"x": 1, "y": 0}}, "endConnection": {"pos": {"x": 3, "y": 0}}},
+            {"id": "w2", "startConnection": {"pos": {"x": 5, "y": 0}}, "endConnection": {"pos": {"x": 8, "y": 0}}},
+        ],
+    }
+    from ggl.errors import CircuitError
+    with pytest.raises(CircuitError) as ei:
+        _run(view.generate(ggc, mode="run"))
+    e = ei.value
+    assert e.error_code == "bitWidthMismatch"
+    assert e.port_name.startswith("ADDR")
+    assert e.additional_fields.get("expectedBits") == 8
+    assert e.additional_fields.get("actualBits") == 64
+    assert e.circuit_name == "instr-mem"  # names the subcircuit, not the flattened top
+
+
 @pytest.mark.parametrize("nest,expected", [(False, "main"), (True, "widener")])
 def test_runtime_error_names_the_circuit_it_occurred_in(nest, expected):
     # A bit-width mismatch raised while settling must name the circuit it happened in. A

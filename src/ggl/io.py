@@ -112,6 +112,19 @@ class ChildInput(Input):
         self._value = new_value
 
     def propagate(self, output_name='0', value=0):
+        # A subcircuit port must be driven at its own width: otherwise the value is silently
+        # re-widthed at the boundary and a real wiring mistake (a 64-bit bus into an 8-bit
+        # port, a 4-bit signal onto a 1-bit clock) goes unreported. Enforce an exact match,
+        # like a direct wire does. bits is None until the parent has driven the edge once.
+        if self.parent_edge.bits is not None and self.parent_edge.bits != self.bits:
+            raise CircuitError(
+                component_id=self.js_id,
+                component_type=self.error_kind,
+                component_label=self.label,
+                error_code="bitWidthMismatch",
+                port_name=self.label,
+                expectedBits=self.bits,
+                actualBits=self.parent_edge.bits)
         # Read value from parent circuit's edge
         self.value = self.parent_edge.value
         # Propagate to child circuit's internal nodes
