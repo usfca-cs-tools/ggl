@@ -460,12 +460,17 @@ class Test(Node):
     async def evaluate_async(self, circuit):
         """Cooperative run for the browser (mode='test_async' codegen).
 
-        Same checks and result as evaluate(), but between clock cycles it yields
-        to the event loop on a throttle so the UI stays responsive, live updates
-        render, the queued highlight timers drain, and a Stop (circuit.stop_requested)
-        is honored — restoring the circuit and returning a 'cancelled' result
-        rather than a pass/fail. Once stop is requested, every remaining Test in
-        the program short-circuits here without touching the circuit.
+        Same checks as evaluate(), but between clock cycles it yields to the event
+        loop on a throttle so the UI stays responsive, live updates render, the
+        queued highlight timers drain, and a Stop (circuit.stop_requested) is
+        honored — restoring the circuit and returning a 'cancelled' result rather
+        than a pass/fail. Once stop is requested, every remaining Test in the
+        program short-circuits here without touching the circuit.
+
+        Unlike evaluate(), a Test failure is RETURNED as a fail result (with the
+        structured detail) instead of raised, so the interactive Run Tests pass
+        runs every Test and stacks a toast per failure rather than stopping at the
+        first. A non-Test CircuitError (a broken circuit) still propagates.
         """
         if circuit.stop_requested:
             return {'label': self.label, 'passed': None, 'cancelled': True}
@@ -484,3 +489,15 @@ class Test(Node):
                     last_yield = now
         except StopIteration as done:
             return done.value
+        except CircuitError as err:
+            # A Test's own failure (a mismatched row, a missing column, an unmet stop
+            # condition). The synchronous evaluate() propagates this so grade.py/pytest see the
+            # raise, but the interactive Run Tests pass must NOT stop at the first failing Test:
+            # report this one via an enriched 'test' event (the front end badges it and stacks a
+            # toast) and return a fail result so the caller moves on to the next Test. A non-Test
+            # error means the circuit itself is broken (short circuit, open input, ...) — re-raise
+            # to halt the whole pass, since every Test would just hit the same wall.
+            if err.component_type != Test.kind:
+                raise
+            callbacks.emit('test', self.js_id, {**err.to_dict(), 'passed': False})
+            return {'label': self.label, 'passed': False, **err.to_dict()}

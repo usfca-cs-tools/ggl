@@ -364,3 +364,51 @@ def test_evaluate_async_stop_mid_run_cancels_and_restores(monkeypatch):
     result = asyncio.run(scenario())
     assert result["cancelled"] is True
     assert b.value == 7  # restored to the authored value, not the row's 100
+
+
+def test_evaluate_async_returns_fail_instead_of_raising():
+    # The interactive Run Tests pass must run every Test, so a failing Test returns a fail
+    # result (not a raise) — otherwise the first failure would abort the rest. The fail dict
+    # carries the structured detail the front end localizes into a per-Test toast.
+    c = make_and_gate()
+    t = io.Test(label="AND", js_id="t1",
+                input_names=["A", "B"], output_names=["Y"], rows=[[1, 1, 0]])  # AND(1,1)=1
+    result = asyncio.run(t.evaluate_async(c))
+    assert result["passed"] is False
+    assert result["error_code"] == "testFailed"
+    assert result["component_type"] == io.Test.kind
+
+
+def test_evaluate_async_emits_enriched_fail_event():
+    # The 'test' fail event carries error_code + fields (not just passed:False) so the toast
+    # can say what actually mismatched.
+    events = []
+    callbacks.set_callback(lambda ev, cid, p: events.append((ev, cid, p)))
+    c = make_and_gate()
+    t = io.Test(label="AND", js_id="t1",
+                input_names=["A", "B"], output_names=["Y"], rows=[[1, 1, 0]])
+    asyncio.run(t.evaluate_async(c))
+    test_events = [e for e in events if e[0] == "test"]
+    enriched = test_events[-1][2]
+    assert enriched["passed"] is False
+    assert enriched["error_code"] == "testFailed"
+    assert enriched["expected"] == 0 and enriched["actual"] == 1
+
+
+def test_evaluate_async_reraises_non_test_error(monkeypatch):
+    # A CircuitError from the circuit itself (not the Test) must still propagate and halt the
+    # pass, rather than being swallowed as a per-Test failure. Inject one from the run so the
+    # test doesn't depend on which build-time errors happen to surface during evaluation.
+    c = make_and_gate()
+    t = io.Test(label="AND", js_id="t1",
+                input_names=["A", "B"], output_names=["Y"], rows=[[1, 1, 1]])
+
+    def boom(_circuit):
+        raise CircuitError(component_id="g1", component_type="and-gate",
+                           component_label="G", error_code="circuitLoop")
+        yield  # noqa: unreachable, but makes boom a generator like _evaluate_steps
+
+    monkeypatch.setattr(t, "_evaluate_steps", boom)
+    with pytest.raises(CircuitError) as ei:
+        asyncio.run(t.evaluate_async(c))
+    assert ei.value.component_type != io.Test.kind
