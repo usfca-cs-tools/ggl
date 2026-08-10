@@ -315,9 +315,15 @@ class Circuit:
         if destnode.kind == Output.kind and destnode not in self.outputs:
             self.outputs.append(destnode)
 
+        from .wires import Tunnel
         for node in (srcnode, destnode):
             if node not in self.all_nodes:
                 self.all_nodes.append(node)
+            # A tunnel resolves its net within its owning circuit (see Tunnel.propagate), so
+            # it needs a back-reference to this circuit. Scope this to tunnels: other nodes
+            # don't need it, and CircuitNode.circuit means something else entirely.
+            if node.kind == Tunnel.kind:
+                node.circuit = self
 
         # Keep the Clock node for running the circuit
         if srcnode.kind == Clock.kind:

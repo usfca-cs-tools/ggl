@@ -90,7 +90,6 @@ class Tunnel(WireNode):
     Tunnels a value from input to output, used for readability and to reduce wiring
     """
     kind = 'Tunnel'
-    tunnel_history = {}
 
     def __init__(self, js_id='', label='', direction='input', **kwargs):
         # A tunnel is a named wire and has no width of its own — it carries whatever the
@@ -105,39 +104,46 @@ class Tunnel(WireNode):
         )
 
         self.direction = direction
-
-        if self.label:
-            Tunnel.tunnel_history.setdefault(self.label, []).append(self)
-
-    @classmethod
-    def reset_history(cls):
-        """Clear the process-global label registry. tunnel_history is a class attribute
-        that accumulates every Tunnel ever constructed, so in a persistent interpreter
-        (the browser's Pyodide session, or an autograder looping over circuits) stale
-        tunnels from a previous circuit would linger under the same label. Each generated
-        program calls this once at the top so a run only sees its own tunnels."""
-        cls.tunnel_history = {}
+        # Owning Circuit, set by Circuit.connect() (top level) or _clone_circuit() (embedded
+        # instance). Same-label tunnels join within THIS circuit only (see propagate()), so a
+        # subcircuit's internal tunnels resolve among its own nodes — not through a global
+        # registry, which cloning bypassed and which would cross-talk between instances.
+        self.circuit = None
 
     def is_output_tunnel(self):
         return self.direction == 'output'
     
     def propagate(self, output_name='0', value=0):
-        if not self.label or self.direction != 'input':
+        if not self.label or self.direction != 'input' or self.circuit is None:
             return []
 
-        # Read the driving edge at whatever width the driver produced and republish that to
-        # every same-label subscriber. The tunnel imposes no width of its own, so the value
-        # crosses intact; a genuine width mismatch surfaces where the net is finally read.
+        # Read the driving edge at whatever width the driver produced and republish it to
+        # every same-label subscriber IN THIS CIRCUIT. The tunnel imposes no width of its
+        # own, so the value crosses intact; a genuine width mismatch surfaces where the net
+        # is finally read.
         edge = self.inputs.get_edge('0')
         if edge is None or edge.bits is None:
             return []  # the net has no driver yet on this pass
 
         logger.info(f'{self.kind} {self.label} (input): publishing {bin(edge.value)} ({edge.bits} bits)')
         work = []
-        for tunnel in Tunnel.tunnel_history.get(self.label, []):
-            if tunnel is not self and tunnel.is_output_tunnel():
-                work += tunnel.receive(edge.value, edge.bits)
+        for sink in self._sinks_for(self.circuit).get(self.label, []):
+            work += sink.receive(edge.value, edge.bits)
         return work
+
+    @staticmethod
+    def _sinks_for(circuit):
+        """Map label -> [output tunnels] for `circuit`, built once and cached on the circuit.
+        The tunnel graph is fixed once construction/connect finish (before any run), so a
+        single scan of all_nodes suffices — no per-pass rescans, no process-global state."""
+        sinks = getattr(circuit, '_tunnel_sinks', None)
+        if sinks is None:
+            sinks = {}
+            for node in circuit.all_nodes:
+                if getattr(node, 'kind', None) == 'Tunnel' and node.direction == 'output' and node.label:
+                    sinks.setdefault(node.label, []).append(node)
+            circuit._tunnel_sinks = sinks
+        return sinks
 
     def receive(self, value, bits):
         if self.direction != 'output':

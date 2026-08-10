@@ -613,13 +613,92 @@ def test_tunnel_net_with_two_drivers_raises():
     assert ei.value.error_code == "simulation.errors.tunnelMultipleDrivers"
 
 
-def test_tunnel_history_is_reset_per_program():
-    # tunnel_history is process-global; each generated program clears it at the top so a
-    # prior run's tunnels can't leak. Run label "N"=1, then label "N"=0 in the same process:
-    # without the reset, the stale publisher would still push 1 to the new subscriber.
-    assert "wires.Tunnel.reset_history()" in view.generate(_tunnel_ggc(1))
+def test_tunnel_nets_are_isolated_per_program():
+    # Tunnels join within their own Circuit (no process-global registry), so running one
+    # program after another in the same process can't leak: label "N"=1 then "N"=0 back to
+    # back must give Y==1 then Y==0, with no stale publisher pushing 1 into the second run.
     assert _output(_run(view.generate(_tunnel_ggc(1))), "Y").value == 1
     assert _output(_run(view.generate(_tunnel_ggc(0))), "Y").value == 0
+
+
+def _internal_tunnel_sub(name):
+    # A subcircuit whose ONLY internal net is input-tunnel "T" -> output-tunnel "T":
+    # A -> tunnel(in) ; tunnel(out) -> D. In isolation this joins fine; the bug was that a
+    # cloned instance's tunnels never rejoined, so the embedded output silently read 0.
+    return {
+        "definition": {"name": name},
+        "circuit": {
+            "components": [
+                {"id": "A", "type": "input", "x": 0, "y": 0, "props": {"label": "A", "bits": 8},
+                 "ports": [{"name": "0", "x": 1, "y": 0, "direction": "output"}]},
+                {"id": "TI", "type": "tunnel", "x": 2, "y": 0, "props": {"label": "T", "direction": "input"},
+                 "ports": [{"name": "0", "x": 0, "y": 0, "direction": "input"}]},
+                {"id": "TO", "type": "tunnel", "x": 4, "y": 0, "props": {"label": "T", "direction": "output"},
+                 "ports": [{"name": "0", "x": 1, "y": 0, "direction": "output"}]},
+                {"id": "D", "type": "output", "x": 7, "y": 0, "props": {"label": "D", "bits": 8},
+                 "ports": [{"name": "0", "x": 0, "y": 0, "direction": "input"}]},
+            ],
+            "wires": [
+                {"id": "wa", "startConnection": {"pos": {"x": 1, "y": 0}}, "endConnection": {"pos": {"x": 2, "y": 0}}},
+                {"id": "wd", "startConnection": {"pos": {"x": 5, "y": 0}}, "endConnection": {"pos": {"x": 7, "y": 0}}},
+            ],
+        },
+    }
+
+
+def _sc(cid, y, circuit_id):
+    return {"id": cid, "type": "schematic-component", "x": 3, "y": y,
+            "props": {"label": cid, "circuitId": circuit_id},
+            "ports": [{"name": "0", "x": 0, "y": 0, "direction": "input"},
+                      {"name": "0", "x": 2, "y": 0, "direction": "output"}]}
+
+
+def test_subcircuit_internal_tunnel_survives_embedding():
+    # A subcircuit's own input->output tunnel net must still carry its value when the
+    # subcircuit is embedded (cloned) in a parent — not silently resolve to 0.
+    ggc = {
+        "version": "1.4", "name": "top", "schematicComponents": {"s": _internal_tunnel_sub("t")},
+        "components": [
+            {"id": "K", "type": "constant", "x": 0, "y": 0, "props": {"value": 5, "bits": 8},
+             "ports": [{"name": "0", "x": 1, "y": 0, "direction": "output"}]},
+            _sc("SC", 0, "s"),
+            {"id": "OUT", "type": "output", "x": 8, "y": 0, "props": {"label": "OUT", "bits": 8},
+             "ports": [{"name": "0", "x": 0, "y": 0, "direction": "input"}]},
+        ],
+        "wires": [
+            {"id": "w1", "startConnection": {"pos": {"x": 1, "y": 0}}, "endConnection": {"pos": {"x": 3, "y": 0}}},
+            {"id": "w2", "startConnection": {"pos": {"x": 5, "y": 0}}, "endConnection": {"pos": {"x": 8, "y": 0}}},
+        ],
+    }
+    assert _output(_run(view.generate(ggc, mode="run")), "OUT").value == 5
+
+
+def test_two_instances_of_tunnel_subcircuit_stay_independent():
+    # Same tunnel label "T" in two instances of one subcircuit must NOT cross-talk: each
+    # instance's net is scoped to its own cloned circuit.
+    ggc = {
+        "version": "1.4", "name": "top", "schematicComponents": {"s": _internal_tunnel_sub("t")},
+        "components": [
+            {"id": "K1", "type": "constant", "x": 0, "y": 0, "props": {"value": 5, "bits": 8},
+             "ports": [{"name": "0", "x": 1, "y": 0, "direction": "output"}]},
+            {"id": "K2", "type": "constant", "x": 0, "y": 4, "props": {"value": 9, "bits": 8},
+             "ports": [{"name": "0", "x": 1, "y": 0, "direction": "output"}]},
+            _sc("SC1", 0, "s"), _sc("SC2", 4, "s"),
+            {"id": "O1", "type": "output", "x": 8, "y": 0, "props": {"label": "O1", "bits": 8},
+             "ports": [{"name": "0", "x": 0, "y": 0, "direction": "input"}]},
+            {"id": "O2", "type": "output", "x": 8, "y": 4, "props": {"label": "O2", "bits": 8},
+             "ports": [{"name": "0", "x": 0, "y": 0, "direction": "input"}]},
+        ],
+        "wires": [
+            {"id": "w1", "startConnection": {"pos": {"x": 1, "y": 0}}, "endConnection": {"pos": {"x": 3, "y": 0}}},
+            {"id": "w2", "startConnection": {"pos": {"x": 5, "y": 0}}, "endConnection": {"pos": {"x": 8, "y": 0}}},
+            {"id": "w3", "startConnection": {"pos": {"x": 1, "y": 4}}, "endConnection": {"pos": {"x": 3, "y": 4}}},
+            {"id": "w4", "startConnection": {"pos": {"x": 5, "y": 4}}, "endConnection": {"pos": {"x": 8, "y": 4}}},
+        ],
+    }
+    ns = _run(view.generate(ggc, mode="run"))
+    assert _output(ns, "O1").value == 5
+    assert _output(ns, "O2").value == 9
 
 
 def test_unresolved_wire_is_skipped_not_crashed():

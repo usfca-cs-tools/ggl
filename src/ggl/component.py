@@ -79,6 +79,11 @@ class CircuitNode(Node):
                 cloned_node.circuit = cloned_circuit
             if template_node in template.outputs:
                 cloned_circuit.outputs.append(cloned_node)
+            # A tunnel resolves its net within its owning circuit, so point the clone at THIS
+            # cloned circuit (the template pointed at the template circuit). Without this a
+            # cloned subcircuit's internal tunnels never rejoin and silently carry nothing.
+            if cloned_node.kind == 'Tunnel':
+                cloned_node.circuit = cloned_circuit
 
         # Clone all connections and build edge mapping for nested CircuitNode fixup
         # Maps template edge to cloned edge

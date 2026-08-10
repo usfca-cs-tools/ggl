@@ -519,9 +519,6 @@ def generate(ggc, mode="run"):
     lines = [
         "from ggl import arithmetic, circuit, component, io, logic, memory, plexers, wires"
     ]
-    # Tunnels join by label through a process-global registry; clear it so a prior run's
-    # tunnels (in a persistent Pyodide/CPython session) never leak into this circuit.
-    lines.append("wires.Tunnel.reset_history()")
 
     templates = {}  # circuitId -> template variable name
 
