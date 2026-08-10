@@ -87,7 +87,7 @@ def _component_expr(comp, tunnel_dir=None):
                 int(p.get("value", 0) or 0))
     if t == "clock":
         return (f'io.Clock(label="{_esc(label)}", frequency={p.get("frequency", 1)}, '
-                f'mode="{_esc(p.get("mode", "manual"))}", js_id="{_esc(js_id)}")', None)
+                f'mode="{_esc(p.get("mode", "auto"))}", js_id="{_esc(js_id)}")', None)
     if t == "output":
         return (f'io.Output(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
     if t in _GATE_CLASS:

@@ -173,6 +173,18 @@ class Circuit:
         self.clock.value = 0
         self.settle()
 
+    def tick(self):
+        """Advance a MANUAL clock by one edge (rising or falling), then settle — the
+        hand-stepped counterpart to run_async()'s free-run toggle. Two ticks make a full
+        low->high->low cycle. No-op unless a Manual clock is connected: an Auto clock is
+        driven by run_async() (stepping it would race the free-run loop), and a circuit
+        with no clock has nothing to step. settle() brackets one UI batch, so each tick
+        renders exactly once."""
+        if self.clock is None or self.clock.mode != 'manual':
+            return
+        self.clock.value = 1 - self.clock.value
+        self.settle()
+
     def benchmark(self, iterations=1000):
         """Time `iterations` of clock-toggle + settle() with no real-time
         pacing — one iteration is the work run_async() does per clock edge.
@@ -225,7 +237,10 @@ class Circuit:
         self.preflight()
         self.settle()
         while self.running:
-            if self.clock is not None and self.clock.frequency:
+            # Only an Auto clock free-runs. A Manual clock stays idle here (advanced by hand
+            # via tick()) but the loop keeps spinning so live update_input() still settles.
+            if (self.clock is not None and self.clock.mode == 'auto'
+                    and self.clock.frequency):
                 await asyncio.sleep(1 / self.clock.frequency / 2)
                 self.clock.value = 1 - self.clock.value
                 self.settle()
