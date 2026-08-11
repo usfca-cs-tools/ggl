@@ -7,9 +7,26 @@ from . import callbacks
 logger = new_logger(__name__)
 
 
-class Register(BitsNode):
-    D = 'D'
+class Clockable:
+    """Mixin for nodes that act on a rising CLK edge (Register, RegisterClr, RAM).
+    settle() calls propagate() repeatedly until the circuit stops changing, so a clocked
+    node must latch on the CLK 0->1 EDGE, not while CLK is merely high
+    """
     CLK = 'CLK'
+    _prev_clk = 0  # last CLK level seen; class default, shadowed per-instance on first write
+
+    def clock_edge(self):
+        """Read CLK and return (level, rising); `rising` is True only on the pass where CLK
+        goes 0->1, exactly once per propagate()
+        """
+        clk = self.safe_read_input(Clockable.CLK, bits=1)
+        rising = self._prev_clk == 0 and clk == 1
+        self._prev_clk = clk
+        return clk, rising
+
+
+class Register(Clockable, BitsNode):
+    D = 'D'
     en = 'en'
     Q = 'Q'
     kind = 'Register'
@@ -23,13 +40,10 @@ class Register(BitsNode):
             named_inputs=[Register.D, Register.CLK, Register.en],
             named_outputs=[Register.Q])
         self.value = random.getrandbits(bits)  # initial state is random
-        self._prev_clk = 0  # last CLK level seen, for rising-edge detection
 
     def propagate(self, output_name='Q', value=0):
+        _, rising = self.clock_edge()
         en = self.safe_read_input(Register.en, bits=1)
-        clk = self.safe_read_input(Register.CLK, bits=1)
-        rising = self._prev_clk == 0 and clk == 1
-        self._prev_clk = clk
         if rising and en:
             self.value = self.safe_read_input(Register.D)
         return super().propagate(output_name=output_name, value=self.value)
@@ -37,7 +51,7 @@ class Register(BitsNode):
     # Nothing special to do for clone(). BitsNode.clone() is enough.
 
 
-class RegisterClr(BitsNode):
+class RegisterClr(Clockable, BitsNode):
     """Edge-triggered register with an asynchronous clear.
 
     Ports: D, CLK, en, CLR -> Q.
@@ -52,7 +66,6 @@ class RegisterClr(BitsNode):
       this propagate() logic gives them their meaning.
     """
     D = 'D'
-    CLK = 'CLK'
     en = 'en'
     CLR = 'CLR'
     Q = 'Q'
@@ -68,14 +81,11 @@ class RegisterClr(BitsNode):
                           RegisterClr.en, RegisterClr.CLR],
             named_outputs=[RegisterClr.Q])
         self.value = random.getrandbits(bits)  # initial state is random
-        self._prev_clk = 0  # last CLK level seen, for rising-edge detection
 
     def propagate(self, output_name='Q', value=0):
         clr = self.safe_read_input(RegisterClr.CLR, bits=1)
-        clk = self.safe_read_input(RegisterClr.CLK, bits=1)
+        _, rising = self.clock_edge()
         en = self.safe_read_input(RegisterClr.en, bits=1)
-        rising = self._prev_clk == 0 and clk == 1
-        self._prev_clk = clk
         if clr:
             self.value = 0                       # asynchronous, dominant
         elif rising and en:
@@ -172,12 +182,11 @@ class ROM(Addressable):
                     self.memory[i] = data[i]
 
 
-class RAM(Addressable):
+class RAM(Clockable, Addressable):
     kind = 'RAM'
     Din = 'Din'
     ld = 'ld'
     st = 'st'
-    CLK = 'CLK'
 
     def __init__(self, label='', js_id='', address_bits=4, data_bits=8):
         super().__init__(kind=RAM.kind, label=label, js_id=js_id,
@@ -185,13 +194,15 @@ class RAM(Addressable):
                          named_outputs=[], address_bits=address_bits, data_bits=data_bits)
 
     def propagate(self, output_name=Addressable.D, value=0, bits=None):
-        clk = self.safe_read_input(RAM.CLK, bits=1)
+        # Write on the rising CLK edge, not on level (see Clockable), otherwise
+        # a cyclic read-modify-write datapath would never settle
+        clk, rising = self.clock_edge()
         if clk == 0:
             return []
         addr = self.calc_address()
 
         st = self.safe_read_input(RAM.st, bits=1)
-        if st == 1:
+        if rising and st == 1:
             din = self.safe_read_input(RAM.Din)
             self.write_address(addr, din)
 
