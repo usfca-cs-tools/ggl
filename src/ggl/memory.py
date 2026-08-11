@@ -13,7 +13,10 @@ class Clockable:
     node must latch on the CLK 0->1 EDGE, not while CLK is merely high
     """
     CLK = 'CLK'
-    _prev_clk = 0  # last CLK level seen; class default, shadowed per-instance on first write
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)  # -> the Node base, via the (Clockable, ...) MRO
+        self._prev_clk = 0  # last CLK level seen, for rising-edge detection
 
     def clock_edge(self):
         """Read CLK and return (level, rising); `rising` is True only on the pass where CLK
