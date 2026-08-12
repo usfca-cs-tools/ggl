@@ -21,12 +21,22 @@ logger = new_logger(__name__)
 _host_callback = None   # set by the host via set_callback(fn)
 _scalar = None          # js_id -> (event, payload); None means "not batching"
 _memory = None          # list of (js_id, payload)
+_step_enabled = True     # 'step' (wire-highlight) events; host disables them for batch runs
 
 
 def set_callback(fn):
     """Register the host's update callback (or None to clear)."""
     global _host_callback
     _host_callback = fn
+
+
+def set_step_enabled(enabled):
+    """Enable/disable 'step' (wire-highlight) events. A batch test settles the circuit
+    thousands of times; the resulting flood of per-wire highlights (hundreds of thousands
+    of events) is invisible at that speed and starves the events the user actually watches
+    — output values and RAM writes. The host turns highlighting off for test runs."""
+    global _step_enabled
+    _step_enabled = bool(enabled)
 
 
 def _sink():
@@ -44,6 +54,8 @@ def start_batch():
 
 def emit(event, js_id, payload):
     if not js_id:
+        return
+    if event == "step" and not _step_enabled:
         return
     if _scalar is None:
         _fire(_sink(), event, js_id, payload)

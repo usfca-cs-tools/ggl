@@ -13,8 +13,26 @@ from ggl import callbacks, circuit, io, logic
 @pytest.fixture(autouse=True)
 def clear_callback():
     callbacks.set_callback(None)
+    callbacks.set_step_enabled(True)
     yield
     callbacks.set_callback(None)
+    callbacks.set_step_enabled(True)
+
+
+def test_set_step_enabled_false_suppresses_step_events_only():
+    calls = []
+    callbacks.set_callback(lambda event, cid, payload: calls.append((event, cid, payload)))
+    callbacks.set_step_enabled(False)
+
+    callbacks.start_batch()
+    callbacks.emit("step", "wire_1", {"value": "1"})   # suppressed
+    callbacks.emit("value", "out_1", "1")              # kept
+    callbacks.emit("memory", "ram_1", {"address": 0, "value": "1"})  # kept
+    callbacks.flush_batch()
+
+    events = [e for (e, _c, _p) in json.loads(calls[0][2])]
+    assert "step" not in events
+    assert set(events) == {"value", "memory"}
 
 
 def test_settle_delivers_one_batch_to_registered_callback():
