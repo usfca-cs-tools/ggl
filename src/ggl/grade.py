@@ -9,13 +9,14 @@ result line to stdout for the autograder to compare against an expected value:
                               errored (e.g. an unconnected input)
     NO TESTS                  no Test to grade
 
-Test provenance is INSTRUCTOR-INJECTED: the grading Test lives in a separate JSON spec that
-the instructor controls (in the project's tests dir), and ``--test`` merges it onto the
-student's circuit, replacing any Test the student may have embedded. The student just has to
-match the interface labels the assignment specifies (the Test references Inputs/Outputs by
-label). Without ``--test`` it grades whatever Test is already in the circuit.
+Test provenance is INSTRUCTOR-INJECTED: the grading Test lives in a separate ``.ggc`` that the
+instructor authors and exports from the app (a circuit whose only meaningful component is the
+grading Test), and ``--test`` merges that Test onto the student's circuit, replacing any Test
+the student may have embedded. The student just has to match the interface labels the
+assignment specifies (the Test references Inputs/Outputs by label). Without ``--test`` it
+grades whatever Test is already in the circuit.
 
-Usage:  python -m ggl.grade <circuit.ggc> [--test <test.json>]
+Usage:  python -m ggl.grade <circuit.ggc> [--test <test.ggc>]
 
 The autograder compares stdout line-by-line (case-insensitive), so a project's test case
 sets ``expected = "PASS"`` and runs
@@ -27,6 +28,7 @@ import json
 import sys
 
 from . import view
+from .project import ProjectError, load_project
 
 
 def inject_test(ggc, test_props):
@@ -39,6 +41,18 @@ def inject_test(ggc, test_props):
     components = [c for c in (ggc.get("components") or []) if c.get("type") != "test"]
     components.append({"id": "__injected_test__", "type": "test", "ports": [], "props": test_props})
     return {**ggc, "components": components}
+
+
+def _test_props_from_spec(spec, path):
+    """A ``--test`` spec is a full ``.ggc`` containing exactly the grading Test (authored and
+    exported from the app). Return that Test's props, or None (after printing a FAIL line) when
+    the file has no Test or more than one — the same channel every other grading failure uses."""
+    tests = [c for c in (spec.get("components") or []) if c.get("type") == "test"]
+    if len(tests) != 1:
+        which = "none" if not tests else f"{len(tests)}"
+        print(f"FAIL: test spec must contain exactly one Test component (found {which}): {path}")
+        return None
+    return tests[0].get("props") or {}
 
 
 def clock_without_reset(ggc):
@@ -147,19 +161,32 @@ def main(argv=None):
         prog="python -m ggl.grade",
         description="Grade a Golden Gates .ggc circuit against a Test.")
     parser.add_argument("circuit", help="path to the circuit .ggc")
-    parser.add_argument("--test", dest="test", metavar="TEST.json", default=None,
-                        help="instructor Test spec (JSON of the Test's props); replaces any "
-                             "Test in the circuit")
+    parser.add_argument("--test", dest="test", metavar="TEST.ggc", default=None,
+                        help="instructor Test spec (a .ggc containing the grading Test); "
+                             "replaces any Test in the circuit")
     args = parser.parse_args(argv)
 
     # A student most often fails here: the circuit isn't committed, or is named something
     # other than what the assignment's test case expects. Say so on stdout (where `grade
-    # test -v` shows it) instead of dumping a traceback to stderr.
-    ggc = _load_json(args.circuit, "circuit file")
-    if ggc is None:
+    # test -v` shows it) instead of dumping a traceback to stderr. Loading is directory-aware,
+    # like the app opening a project folder: subcircuits referenced by filename are inlined from
+    # sibling .ggc files into a self-contained model.
+    try:
+        ggc = load_project(args.circuit)
+    except FileNotFoundError:
+        print(f"FAIL: circuit file not found: {args.circuit}")
+        return 1
+    except json.JSONDecodeError as err:
+        print(f"FAIL: circuit file is not valid JSON ({args.circuit}): {err}")
+        return 1
+    except ProjectError as err:
+        print(f"FAIL: {err}")
         return 1
     if args.test:
-        test_props = _load_json(args.test, "test spec")
+        spec = _load_json(args.test, "test spec")
+        if spec is None:
+            return 1
+        test_props = _test_props_from_spec(spec, args.test)
         if test_props is None:
             return 1
         ggc = inject_test(ggc, test_props)

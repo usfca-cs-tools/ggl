@@ -24,6 +24,13 @@ def _counter():
         return json.load(f)
 
 
+def _test_ggc(props):
+    """A ``--test`` spec in the production format: a full ``.ggc`` whose only meaningful
+    component is the grading Test (as authored/exported from the app)."""
+    return {"components": [{"id": "t", "type": "test", "ports": [], "props": props}],
+            "wires": [], "wireJunctions": [], "schematicComponents": {}}
+
+
 def test_inject_replaces_embedded_test_and_grades():
     ggc = grade.inject_test(_counter(), _counter_test_props(5, 5))
     ok, msg = grade.grade(ggc)
@@ -67,8 +74,8 @@ def test_clock_without_reset_is_flagged():
 def test_cli_warning_goes_to_stderr_not_stdout(tmp_path, capsys):
     circuit = tmp_path / "student.ggc"
     circuit.write_text(json.dumps(_counter()))
-    spec = tmp_path / "t.json"
-    spec.write_text(json.dumps(_no_reset_props(5, 5)))
+    spec = tmp_path / "t.ggc"
+    spec.write_text(json.dumps(_test_ggc(_no_reset_props(5, 5))))
     grade.main([str(circuit), "--test", str(spec)])
     out = capsys.readouterr()
     assert "warning" in out.err.lower() and "reset" in out.err.lower()
@@ -83,8 +90,8 @@ def test_grade_no_tests_is_not_a_pass():
 def test_cli_injects_test_and_prints_pass(tmp_path, capsys):
     circuit = tmp_path / "student.ggc"
     circuit.write_text(json.dumps(_counter()))
-    spec = tmp_path / "counter.test.json"
-    spec.write_text(json.dumps(_counter_test_props(3, 3)))
+    spec = tmp_path / "counter.test.ggc"
+    spec.write_text(json.dumps(_test_ggc(_counter_test_props(3, 3))))
     rc = grade.main([str(circuit), "--test", str(spec)])
     assert rc == 0
     assert capsys.readouterr().out.strip() == "PASS"
@@ -93,8 +100,8 @@ def test_cli_injects_test_and_prints_pass(tmp_path, capsys):
 def test_cli_fail_exits_nonzero(tmp_path, capsys):
     circuit = tmp_path / "student.ggc"
     circuit.write_text(json.dumps(_counter()))
-    spec = tmp_path / "counter.test.json"
-    spec.write_text(json.dumps(_counter_test_props(3, 9)))
+    spec = tmp_path / "counter.test.ggc"
+    spec.write_text(json.dumps(_test_ggc(_counter_test_props(3, 9))))
     rc = grade.main([str(circuit), "--test", str(spec)])
     assert rc == 1
     assert capsys.readouterr().out.strip().startswith("FAIL:")
