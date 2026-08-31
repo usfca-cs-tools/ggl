@@ -194,6 +194,44 @@ class ChildOutput(Output):
         return self.outputs.write_value('0', self.value, self.bits)
 
 
+class Probe(IONode):
+    """
+    Probe is a non-intrusive value observer, borrowed from the Digital simulator's
+    "Probe" tool: drop it anywhere and wire it to a signal to watch its live value
+    while the circuit runs. Structurally it's almost identical to Output (one input,
+    reports its value via the same 'value' callback on every propagation), but it is
+    NOT an interface port:
+
+    - Circuit.connect() only appends a node to circuit.outputs when its kind is
+      exactly Output.kind, so a Probe never becomes one of the circuit's outputs.
+    - A subcircuit's ports come from its inner Input/Output components (see
+      ggl.component.CircuitNode and ggl.view._validate_interface_connected, both of
+      which key off type/kind "output" specifically) -- a Probe embedded in a
+      subcircuit stays purely internal and is never exposed to the parent circuit.
+
+    This lets a Probe be dropped onto any wire purely to observe it, without
+    changing the circuit's shape the way adding a real Output would.
+    """
+
+    kind = 'Probe'
+
+    def __init__(self, js_id='', label='', bits=1):
+        super().__init__(
+            kind=Probe.kind,
+            js_id=js_id,
+            num_inputs=1,
+            num_outputs=0,
+            label=label,
+            bits=bits)
+
+    def propagate(self, output_name='0', value=0):
+        self.value = self.safe_read_input('0')
+        logger.info(f"{self.kind} '{self.label}' reads value {self.value}")
+        # Emitted the same way Output does: as a string, so a 64-bit value survives
+        # the JSON round-trip to the UI exactly (BigInt on the JS side).
+        callbacks.emit('value', self.js_id, str(self.value))
+
+
 class Constant(Input):
     """
     Constant is a fixed-value source. For a circuit's own simulation it behaves exactly
