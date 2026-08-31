@@ -90,6 +90,10 @@ def _component_expr(comp, tunnel_dir=None):
                 f'mode="{_esc(p.get("mode", "auto"))}", js_id="{_esc(js_id)}")', None)
     if t == "output":
         return (f'io.Output(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
+    if t == "probe":
+        # A Probe is a value observer, not an interface port (see io.Probe) -- structurally
+        # identical construction to Output, just a different engine class.
+        return (f'io.Probe(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
     if t in _GATE_CLASS:
         args = [f'label="{_esc(label)}"']
         if bits != 1:

@@ -729,3 +729,44 @@ def test_unresolved_wire_is_skipped_not_crashed():
     })
     ns = _run(view.generate(ggc))
     assert _output(ns, "Y").value == 1
+
+
+def _probe_ggc(a):
+    """Input A (value ``a``) -> Probe P. Mirrors _and_ggc's minimal v1.4 shape: the
+    probe's single input port sits at its own origin (0,0), same as Output's."""
+    return {
+        "version": "1.4",
+        "components": [
+            {"id": "A", "type": "input", "x": 0, "y": 0,
+             "props": {"label": "A", "bits": 1, "value": a},
+             "ports": [{"name": "0", "x": 1, "y": 0, "direction": "output"}]},
+            {"id": "P", "type": "probe", "x": 5, "y": 0,
+             "props": {"label": "P", "bits": 1},
+             "ports": [{"name": "0", "x": 0, "y": 0, "direction": "input"}]},
+        ],
+        "wires": [
+            {"id": "w1", "startConnection": {"pos": {"x": 1, "y": 0}, "portType": "output"},
+             "endConnection": {"pos": {"x": 5, "y": 0}, "portType": "input"}},
+        ],
+    }
+
+
+def test_probe_codegen_emits_io_probe():
+    src = view.generate(_probe_ggc(1))
+    assert "io.Probe(" in src
+    assert src.count("circuit0.connect(") == 1  # A -> P
+
+
+def test_probe_receives_propagated_value():
+    ns = _run(view.generate(_probe_ggc(1)))
+    probe = ns["n_P"]
+    assert probe.kind == "Probe"
+    assert probe.value == 1
+
+
+def test_probe_is_not_registered_as_a_circuit_output():
+    # A Probe observes a value but must NOT become one of the circuit's interface
+    # outputs (unlike Output) -- it's a diagnostic tap, not a port.
+    ns = _run(view.generate(_probe_ggc(1)))
+    assert ns["n_P"] not in ns["circuit0"].outputs
+    assert ns["circuit0"].outputs == []

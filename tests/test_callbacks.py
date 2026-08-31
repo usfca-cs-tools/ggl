@@ -55,6 +55,26 @@ def test_settle_delivers_one_batch_to_registered_callback():
     assert ["value", "out_1", "0"] in json.loads(payload)
 
 
+def test_probe_emits_value_like_output_but_is_not_a_circuit_output():
+    calls = []
+    callbacks.set_callback(lambda event, cid, payload: calls.append((event, cid, payload)))
+
+    c = circuit.Circuit()
+    a = io.Input(bits=1, label="a")
+    a.value = 1
+    p = io.Probe(bits=1, js_id="probe_1")
+    c.connect(a, p)
+    c.run()
+
+    assert len(calls) == 1
+    event, cid, payload = calls[0]
+    assert event == "batch"
+    assert ["value", "probe_1", "1"] in json.loads(payload)
+    # Unlike Output, a Probe is never registered as one of the circuit's outputs.
+    assert p not in c.outputs
+    assert c.outputs == []
+
+
 def test_edge_step_carries_bus_value_and_bits():
     # A wire's 'step' event (keyed by the wire js_id) carries the numeric value and bit
     # width, so the UI can show what a multi-bit bus is propagating on hover (issue #133).
