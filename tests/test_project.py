@@ -93,6 +93,15 @@ def test_load_project_inlines_referenced_subcircuit(tmp_path):
     assert model["schematicComponents"][cid]["circuit"]["components"], "subcircuit body missing"
 
 
+def test_inlined_subcircuit_carries_a_friendly_name(tmp_path):
+    # The inlined subdef gets a definition.name so the codegen (and any error on the instance)
+    # names it "passthrough" — from the filename here — rather than the sanitized circuitId.
+    model = load_project(_write_project(tmp_path))
+    inst = next(c for c in model["components"] if c["type"] == "schematic-component")
+    cid = inst["props"]["circuitId"]
+    assert model["schematicComponents"][cid]["definition"]["name"] == "passthrough"
+
+
 def test_missing_subcircuit_raises(tmp_path):
     top = _write_project(tmp_path, top_with_test=False, include_sub=False)
     with pytest.raises(ProjectError):

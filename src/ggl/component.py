@@ -32,13 +32,22 @@ class CircuitNode(Node):
         input_names = [inp.label for inp in interface_inputs]
         output_names = [out.label for out in template.outputs]
 
-        # Initialize as a Node with the circuit's interface
+        # Initialize as a Node with the circuit's interface. Label the instance after the
+        # subcircuit's definition name (circuit_name) when it has no label of its own, so an
+        # error on this node reads e.g. "alu_501759" — naming the subcircuit the user placed —
+        # rather than the opaque generic "circuit_501759".
+        if template.label:
+            label = f"{template.label}_{instance_id}"
+        elif template.circuit_name:
+            label = f"{template.circuit_name}_{instance_id}"
+        else:
+            label = f"circuit_{instance_id}"
         super().__init__(
             kind='CircuitNode',
             js_id='',
             innames=input_names,
             outnames=output_names,
-            label=f"{template.label}_{instance_id}" if template.label else f"circuit_{instance_id}"
+            label=label
         )
 
         # Create mapping from original names to cloned node names for internal use

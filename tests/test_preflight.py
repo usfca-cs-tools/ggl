@@ -64,6 +64,37 @@ def test_orphaned_input_source_preflights_clean():
     c.run()   # must not raise
 
 
+def test_preflight_error_names_the_subcircuit_it_occurred_in():
+    # A node cloned into a subcircuit is tagged with that subcircuit's name (see
+    # component.py). An open-input error on it must carry that name, so a dangling
+    # input deep in the hierarchy tells the user which subcircuit owns it — not just
+    # the bare port name. Mirrors how step() tags a propagation error.
+    c = circuit.Circuit(circuit_name="top")
+    a = io.Input(bits=1, label="A"); a.value = 1
+    g = logic.And()
+    g.circuit_name = "adder-1-bit"          # as if cloned in from that subcircuit
+    c.connect(a, g.input("0"))              # only one AND input wired
+    c.connect(g, io.Output(bits=1, label="Y", js_id="y"))
+    with pytest.raises(CircuitError) as ei:
+        c.run()
+    d = ei.value.to_dict()
+    assert d["error_code"] == "inputNotConnected"
+    assert d["circuit_name"] == "adder-1-bit"   # the owning subcircuit, not "top"
+
+
+def test_preflight_error_falls_back_to_the_running_circuit_name():
+    # A node with no subcircuit tag (lives directly in the top circuit) still gets
+    # named with that circuit's own name.
+    c = circuit.Circuit(circuit_name="top")
+    a = io.Input(bits=1, label="A"); a.value = 1
+    g = logic.And()
+    c.connect(a, g.input("0"))
+    c.connect(g, io.Output(bits=1, label="Y", js_id="y"))
+    with pytest.raises(CircuitError) as ei:
+        c.run()
+    assert ei.value.to_dict()["circuit_name"] == "top"
+
+
 def test_decoder_has_no_phantom_data_inputs():
     # Regression: a Decoder used to inherit 2 unused data inputs from Plexer;
     # only 'sel' is required, so preflight must pass with just 'sel' connected.

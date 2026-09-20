@@ -93,7 +93,11 @@ def load_project(circuit_path):
                 "wires": sub.get("wires", []) or [],
                 "wireJunctions": sub.get("wireJunctions", []) or [],
             }
-            schematic[fcid] = {"circuit": inner}
+            # Carry a human-friendly name (the subcircuit's own, else its filename) so the codegen
+            # and any error name it "branch-unit", not the sanitized circuitId "sub_branch_unit".
+            sub_name = (sub.get("definition") or {}).get("name") \
+                or os.path.splitext(os.path.basename(filename))[0]
+            schematic[fcid] = {"circuit": inner, "definition": {"name": sub_name}}
             link(inner)  # a subcircuit may reference deeper subcircuits by filename
 
     link(top)

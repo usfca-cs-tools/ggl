@@ -13,6 +13,32 @@ logger = new_logger(__name__)
 
 MAX_ITERATIONS = 100  # Prevent runaway settle loops on unstable circuits
 
+
+def _tag_circuit_context(err, node, fallback_name):
+    """Return `err` tagged with the circuit it occurred in, if it isn't already.
+
+    Prefer the failing node's own `circuit_name` — set when a subcircuit's nodes
+    are cloned into a parent (see component.py) — so a nested error names the
+    subcircuit it happened in rather than the flattened top-level circuit; fall
+    back to the running circuit's own name. Returns `err` unchanged when it
+    already carries a circuit or there's no context to add, so callers can test
+    identity to decide whether to re-raise a new error.
+    """
+    ctx_name = getattr(node, 'circuit_name', None) or fallback_name
+    if err.circuit_name or not ctx_name:
+        return err
+    return CircuitError(
+        component_id=err.component_id,
+        component_type=err.component_type,
+        component_label=err.component_label,
+        error_code=err.error_code,
+        severity=err.severity,
+        port_name=err.port_name,
+        connected_component_id=err.connected_component_id,
+        circuit_name=ctx_name,
+        **err.additional_fields
+    )
+
 class Circuit:
     """
     Circuits are a collection of Nodes which may be run()
@@ -73,23 +99,10 @@ class Circuit:
                 try:
                     new_work = node.propagate()
                 except CircuitError as e:
-                    # Add circuit context if the error doesn't already carry it. Prefer the
-                    # failing node's own circuit (tagged when a subcircuit's nodes are cloned
-                    # into this one) so a nested error names the subcircuit it occurred in,
-                    # not the flattened top-level circuit.
-                    ctx_name = getattr(node, 'circuit_name', None) or self.circuit_name
-                    if not e.circuit_name and ctx_name:
-                        raise CircuitError(
-                            component_id=e.component_id,
-                            component_type=e.component_type,
-                            component_label=e.component_label,
-                            error_code=e.error_code,
-                            severity=e.severity,
-                            port_name=e.port_name,
-                            connected_component_id=e.connected_component_id,
-                            circuit_name=ctx_name,
-                            **e.additional_fields
-                        ) from e
+                    # Name the subcircuit the error occurred in, if it isn't already tagged.
+                    tagged = _tag_circuit_context(e, node, self.circuit_name)
+                    if tagged is not e:
+                        raise tagged from e
                     raise
                 if new_work:
                     for n in new_work:
@@ -141,9 +154,20 @@ class Circuit:
         ports connected), before settling. Runs once per run(), not per settle().
         Nodes reach all_nodes either by connect() (wired) or add_orphan() (the
         codegen's declared-but-unconnected components), so both a half-wired
-        component and a fully-orphaned one are checked here."""
+        component and a fully-orphaned one are checked here.
+
+        An open-input error is tagged with the subcircuit it occurred in, the
+        same way step() tags a propagation error — otherwise a dangling input
+        deep in the hierarchy reports only the bare port name (e.g. 'A'), with
+        no hint which subcircuit owns it."""
         for node in self.all_nodes:
-            node.preflight()
+            try:
+                node.preflight()
+            except CircuitError as e:
+                tagged = _tag_circuit_context(e, node, self.circuit_name)
+                if tagged is not e:
+                    raise tagged from e
+                raise
 
     def run(self):
         """
