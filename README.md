@@ -117,3 +117,21 @@ Run the suite with pytest:
 ```sh
 uv run pytest
 ```
+
+## Benchmarks
+
+`scripts/benchmark.py` characterizes the engine's **effective clock frequency** — how
+fast GGL can actually advance a circuit (the ceiling on Run and Run Tests), distinct from
+the UI clock frequency you set on a circuit, which only paces the free-running `Run`. It
+sweeps a synthetic `counter-bank ×N` circuit and reports settle passes per edge and
+milliseconds per clock edge:
+
+```sh
+PYTHONPATH=src python3 scripts/benchmark.py
+```
+
+The Golden Gates app runs this same engine inside Pyodide (WASM). The app repo's
+`web/scripts/benchmark-pyodide.mjs` runs these identical circuits both natively and under
+that Pyodide, writing the combined table to `web/BENCHMARKS.md` — so you can see the
+browser's overhead (empirically a flat ~1.5–1.8× on these circuits) alongside the native
+numbers.
