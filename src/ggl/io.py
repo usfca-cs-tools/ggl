@@ -149,7 +149,7 @@ class Output(IONode):
 
     def propagate(self, output_name='0', value=0):
         self.value = self.safe_read_input('0')
-        logger.info(f"{self.kind} '{self.label}' gets value {self.value}")
+        logger.info_enabled and logger.info(f"{self.kind} '{self.label}' gets value {self.value}")
         # Emit as a string: a 64-bit value exceeds JS Number's exact range (2**53) and it crosses
         # to the UI via json.dumps -> JSON.parse. A string survives exactly; the UI parses it with
         # BigInt. (RV64 needs full 64-bit display, e.g. -1 == 0xFFFFFFFFFFFFFFFF.)
@@ -189,7 +189,7 @@ class ChildOutput(Output):
     def propagate(self, output_name='0', value=0):
         # Read value from child circuit's internal edge
         self.value = self.safe_read_input('0')
-        logger.info(f"{self.kind} '{self.label}' gets value {self.value}")
+        logger.info_enabled and logger.info(f"{self.kind} '{self.label}' gets value {self.value}")
         # Use normal NodeOutputs fan-out to propagate to all parent edges
         return self.outputs.write_value('0', self.value, self.bits)
 
@@ -226,7 +226,7 @@ class Probe(IONode):
 
     def propagate(self, output_name='0', value=0):
         self.value = self.safe_read_input('0')
-        logger.info(f"{self.kind} '{self.label}' reads value {self.value}")
+        logger.info_enabled and logger.info(f"{self.kind} '{self.label}' reads value {self.value}")
         # Emitted the same way Output does: as a string, so a 64-bit value survives
         # the JSON round-trip to the UI exactly (BigInt on the JS side).
         callbacks.emit('value', self.js_id, str(self.value))

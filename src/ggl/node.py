@@ -71,7 +71,7 @@ class NodeInputs:
         return edge.value
 
     def __getitem__(self, index):
-        logger.info(f'getitem index: {index}')
+        logger.info_enabled and logger.info(f'getitem index: {index}')
         """Allow array-style access like node.inputs[0]"""
         names = list(self.points.keys())
         if 0 <= index < len(names):
@@ -192,27 +192,9 @@ class Node:
         """Returns a Connector for the named output"""
         return Connector(self, name)
 
-    def __getattribute__(self, name):
-        """
-        Enable attribute-style access to inputs and outputs, with port names taking
-        priority over class attributes (so adder.a is the 'a' port, not the class
-        constant Adder.a == 'a').
-        Examples: mux.sel instead of mux.input("sel"), adder.sum instead of adder.output("sum")
-
-        This runs on EVERY attribute access, so it is kept lean: one __dict__ fetch and
-        an O(1) dict-membership test per port map — no get_names()/keys() view built per
-        access, which previously dominated simulation time. Reads inputs/outputs from
-        __dict__ so an access during construction (before they're set) can't recurse.
-        """
-        ga = object.__getattribute__
-        d = ga(self, '__dict__')
-        inputs = d.get('inputs')
-        if inputs is not None and name in inputs.points:
-            return Connector(self, name)
-        outputs = d.get('outputs')
-        if outputs is not None and name in outputs.points:
-            return Connector(self, name)
-        return ga(self, name)
+    # Optional `node.<portname>` attribute sugar is installed on demand by
+    # enable_sugar() (bottom of this file) — off by default so that every attribute
+    # access on a node stays native-fast on the simulation hot path.
 
     def propagate(self, output_name='0', value=0, bits=0):
         """
@@ -221,7 +203,7 @@ class Node:
         invert, truncation) have been done by propagate() in derived classes
         """
         assert (output_name in self.outputs.points)
-        logger.info(
+        logger.info_enabled and logger.info(
             f"{self.kind} '{self.label}' output '{output_name}' propagates {hex(value)}")
         return self.outputs.write_value(output_name, value, bits)
 
@@ -299,3 +281,34 @@ class BitsNode(Node):
         if bits is None:
             bits = self.bits
         return super().safe_read_input(iname, bits=bits)
+
+
+# --- Optional attribute sugar (opt-in) --------------------------------------
+# `node.<portname>` returns that port's Connector, so a hand-written circuit can
+# say mux.sel instead of mux.input("sel"). Turning it on binds __getattribute__ on
+# Node, which then runs on EVERY attribute access -- a real cost in the simulation
+# hot loop, for a convenience the engine and generated code never use. So it is OFF
+# by default (native attribute access); manual authors call enable_sugar().
+def _sugar_getattribute(self, name):
+    ga = object.__getattribute__
+    d = ga(self, '__dict__')
+    inputs = d.get('inputs')
+    if inputs is not None and name in inputs.points:
+        return Connector(self, name)
+    outputs = d.get('outputs')
+    if outputs is not None and name in outputs.points:
+        return Connector(self, name)
+    return ga(self, name)
+
+
+def enable_sugar():
+    """Turn on `node.<portname>` attribute sugar (for hand-authored circuits)."""
+    Node.__getattribute__ = _sugar_getattribute
+
+
+def disable_sugar():
+    """Turn the sugar back off; restore native attribute access (the default)."""
+    try:
+        del Node.__getattribute__
+    except AttributeError:
+        pass

@@ -1,4 +1,7 @@
 from ggl import circuit, io, memory
+from ggl.node import enable_sugar
+
+enable_sugar()  # node.<port> sugar is opt-in (off by default for speed)
 
 # Test attribute-style syntax with memory components
 circuit0 = circuit.Circuit()

@@ -115,7 +115,7 @@ class PriorityEncoder(Node):
                 inum = int(iname)
                 any = 1
                 break
-        logger.info(f'value: {inum}, bits: {self.selector_bits}')
+        logger.info_enabled and logger.info(f'value: {inum}, bits: {self.selector_bits}')
         new_work = super().propagate(output_name=PriorityEncoder.inum,
                                      value=inum, bits=self.selector_bits)
         new_work += super().propagate(output_name=PriorityEncoder.any, value=any, bits=1)

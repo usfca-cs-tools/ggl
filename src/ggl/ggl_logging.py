@@ -25,6 +25,12 @@ class GGLLogger:
     def __init__(self, name, level, use_js=None):
         self.name = name
         self.level = level
+        # Precomputed so a hot-path caller can short-circuit the message build:
+        #   logger.info_enabled and logger.info(f"...")
+        # When the level is off, the f-string right of `and` is never evaluated, and the
+        # caller never encodes the level comparison itself — it just reads this flag.
+        self.info_enabled = level <= logging.INFO
+        self.debug_enabled = level <= logging.DEBUG
         # If use_js is explicitly set, use that; otherwise auto-detect
         self.use_js = use_js if use_js is not None else _has_js
 

@@ -47,7 +47,7 @@ class Splitter(WireNode):
             # mask bit at i to get bit_val, and then propagate to the output node
             chunk = (input_value >> low) & mask
 
-            logger.info(
+            logger.info_enabled and logger.info(
                 f'{self.kind} {self.label} output {i} ({start}-{end}): {bin(chunk)}')
             new_work += super().propagate(output_name=str(i), value=chunk, bits=width)
 
@@ -125,7 +125,7 @@ class Tunnel(WireNode):
         if edge is None or edge.bits is None:
             return []  # the net has no driver yet on this pass
 
-        logger.info(f'{self.kind} {self.label} (input): publishing {bin(edge.value)} ({edge.bits} bits)')
+        logger.info_enabled and logger.info(f'{self.kind} {self.label} (input): publishing {bin(edge.value)} ({edge.bits} bits)')
         work = []
         for sink in self._sinks_for(self.circuit).get(self.label, []):
             work += sink.receive(edge.value, edge.bits)

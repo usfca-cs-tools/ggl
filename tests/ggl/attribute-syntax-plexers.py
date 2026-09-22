@@ -1,4 +1,7 @@
 from ggl import circuit, io, plexers
+from ggl.node import enable_sugar
+
+enable_sugar()  # node.<port> sugar is opt-in (off by default for speed)
 
 # Test attribute-style syntax with plexer components  
 circuit0 = circuit.Circuit()

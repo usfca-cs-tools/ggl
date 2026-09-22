@@ -1,4 +1,7 @@
 from ggl import circuit, io, memory
+from ggl.node import enable_sugar
+
+enable_sugar()  # node.<port> sugar is opt-in (off by default for speed)
 
 c = circuit.Circuit()
 ram = memory.RAM(label='RAM', address_bits=2, data_bits=2)

@@ -1,4 +1,7 @@
 from ggl import arithmetic, circuit, io
+from ggl.node import enable_sugar
+
+enable_sugar()  # node.<port> sugar is opt-in (off by default for speed)
 
 # Test that both old and new syntax work together
 circuit0 = circuit.Circuit()
