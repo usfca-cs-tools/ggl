@@ -112,3 +112,23 @@ def test_grade_project_straight_from_directory(tmp_path):
     model = load_project(_write_project(tmp_path))
     ok, message = grade.grade(model)
     assert ok, message
+
+
+def test_mutually_referencing_files_raise_recursive_error(tmp_path):
+    # a.ggc places b.ggc and b.ggc places a.ggc. Loading terminates (each file is inlined once),
+    # and the codegen then reports the cycle as a structured error instead of recursing forever.
+    from ggl import view
+    from ggl.errors import CircuitError
+
+    def placing(other):
+        return {"name": other, "wires": [], "wireJunctions": [], "components": [
+            {"id": f"use_{other}", "type": "schematic-component", "x": 0, "y": 0,
+             "props": {"filename": f"{other}.ggc"}, "ports": []}]}
+
+    (tmp_path / "a.ggc").write_text(json.dumps(placing("b")))
+    (tmp_path / "b.ggc").write_text(json.dumps(placing("a")))
+    model = load_project(str(tmp_path / "a.ggc"))
+    with pytest.raises(CircuitError) as ei:
+        view.generate(model)
+    assert ei.value.error_code == "recursiveSubcircuit"
+    assert ei.value.additional_fields.get("chain") == "b → a → b"

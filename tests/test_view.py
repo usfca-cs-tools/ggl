@@ -770,3 +770,73 @@ def test_probe_is_not_registered_as_a_circuit_output():
     ns = _run(view.generate(_probe_ggc(1)))
     assert ns["n_P"] not in ns["circuit0"].outputs
     assert ns["circuit0"].outputs == []
+
+
+def _passthrough_circuit(*placements):
+    """A subcircuit body: input A wired straight to output Y, plus the given placements
+    (bare schematic-components referencing other subcircuits by circuitId)."""
+    return {
+        "components": [
+            {"id": "A", "type": "input", "x": 0, "y": 0, "props": {"label": "A", "bits": 1},
+             "ports": [{"name": "0", "x": 1, "y": 0, "direction": "output"}]},
+            {"id": "Y", "type": "output", "x": 5, "y": 0, "props": {"label": "Y", "bits": 1},
+             "ports": [{"name": "0", "x": 0, "y": 0, "direction": "input"}]},
+            *[{"id": pid, "type": "schematic-component", "x": 20, "y": 0,
+               "props": {"circuitId": cid}, "ports": []} for pid, cid in placements],
+        ],
+        "wires": [
+            {"id": "w1", "startConnection": {"pos": {"x": 1, "y": 0}},
+             "endConnection": {"pos": {"x": 5, "y": 0}}},
+        ],
+    }
+
+
+def _hierarchy_ggc(top_placements, defs):
+    """defs: {circuitId: [(placementId, childCircuitId), ...]} — each a passthrough body."""
+    return {
+        "version": "1.4",
+        "components": [
+            {"id": pid, "type": "schematic-component", "x": 0, "y": 0,
+             "props": {"circuitId": cid}, "ports": []} for pid, cid in top_placements
+        ],
+        "wires": [],
+        "schematicComponents": {
+            cid: {"definition": {"name": cid}, "circuit": _passthrough_circuit(*children)}
+            for cid, children in defs.items()
+        },
+    }
+
+
+def test_subcircuit_containing_itself_raises_recursive_error():
+    # The web app inlines the live circuit for every saved component, so placing A inside A
+    # shows up here as A's definition referencing A. The GGL API can't express that (an
+    # instance is a snapshot copy), so view.generate must reject it instead of recursing forever.
+    from ggl.errors import CircuitError
+    ggc = _hierarchy_ggc([("P", "A")], {"A": [("P", "A")]})
+    with pytest.raises(CircuitError) as ei:
+        view.generate(ggc)
+    assert ei.value.error_code == "recursiveSubcircuit"
+    assert ei.value.component_id == "P"  # the offending placement, so the UI can highlight it
+    assert ei.value.circuit_name == "A"
+    assert ei.value.additional_fields.get("chain") == "A → A"
+
+
+def test_indirect_subcircuit_cycle_raises_recursive_error():
+    # Editing B (the top circuit) and placing A in it, where A already contains B.
+    from ggl.errors import CircuitError
+    ggc = _hierarchy_ggc([("PA", "A")], {"A": [("PB", "B")], "B": [("PA", "A")]})
+    with pytest.raises(CircuitError) as ei:
+        view.generate(ggc)
+    assert ei.value.error_code == "recursiveSubcircuit"
+    assert ei.value.component_id == "PA"
+    assert ei.value.circuit_name == "B"
+    assert ei.value.additional_fields.get("chain") == "A → B → A"
+
+
+def test_shared_subcircuit_is_not_a_cycle():
+    # A diamond (top uses B and C, both of which use D) reuses D's template — not recursion.
+    ggc = _hierarchy_ggc(
+        [("PB", "B"), ("PC", "C")],
+        {"B": [("PD1", "D")], "C": [("PD2", "D")], "D": []})
+    src = view.generate(ggc)
+    assert src.count("circuit.Component(sub_D)") == 1

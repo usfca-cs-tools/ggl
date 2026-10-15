@@ -528,18 +528,35 @@ def generate(ggc, mode="run"):
     ]
 
     templates = {}  # circuitId -> template variable name
+    # circuitIds whose templates are being emitted, outermost first. A .ggc names subcircuits
+    # by reference, so a circuit can (directly or through others) place itself — something the
+    # GGL API can't express, since a Component instance is a snapshot copy. Resolving the
+    # references is where such a cycle exists, so it's caught here rather than recursing forever.
+    in_progress = []
 
-    def ensure_template(circuit_id):
+    def _name_of(circuit_id):
+        return subdefs[circuit_id].get('definition', {}).get('name', circuit_id)
+
+    def ensure_template(circuit_id, placement):
         if circuit_id in templates:
             return templates[circuit_id]
         if circuit_id not in subdefs:
             return None
+        if circuit_id in in_progress:
+            cycle = in_progress[in_progress.index(circuit_id):] + [circuit_id]
+            raise CircuitError(
+                component_id=placement.get("id"), component_type="schematic-component",
+                component_label=_name_of(circuit_id), error_code="recursiveSubcircuit",
+                circuit_name=_name_of(in_progress[-1]),
+                chain=" → ".join(_name_of(c) for c in cycle))
+        in_progress.append(circuit_id)
         inner = subdefs[circuit_id].get("circuit", {}) or {}
         for child in inner.get("components", []) or []:
             if child.get("type") == "schematic-component":
-                ensure_template((child.get("props", {}) or {}).get("circuitId"))
+                ensure_template((child.get("props", {}) or {}).get("circuitId"), child)
+        in_progress.pop()
         cvar = f"sub_{_san(circuit_id)}"
-        name = subdefs[circuit_id].get('definition', {}).get('name', circuit_id)
+        name = _name_of(circuit_id)
         lines.append("")
         lines.append(f"# subcircuit: {name}")
         lines.append(f'{cvar} = circuit.Circuit(circuit_name="{_esc(name)}")')
@@ -553,7 +570,7 @@ def generate(ggc, mode="run"):
 
     for comp in ggc.get("components", []) or []:
         if comp.get("type") == "schematic-component":
-            ensure_template((comp.get("props", {}) or {}).get("circuitId"))
+            ensure_template((comp.get("props", {}) or {}).get("circuitId"), comp)
 
     lines.append("")
     top_name = ggc.get("name")
