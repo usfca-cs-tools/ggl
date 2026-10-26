@@ -840,3 +840,22 @@ def test_shared_subcircuit_is_not_a_cycle():
         {"B": [("PD1", "D")], "C": [("PD2", "D")], "D": []})
     src = view.generate(ggc)
     assert src.count("circuit.Component(sub_D)") == 1
+
+
+def _chips_rom(words, address_bits=3):
+    return {"id": "c1", "type": "chipsROM", "props": {"label": "IMEM", "addressBits": address_bits, "words": words}}
+
+def test_chips_rom_with_no_program_raises():
+    from ggl.errors import CircuitError, ERROR_CHIPSROM_NO_PROGRAM
+    with pytest.raises(CircuitError) as ei:
+        view._component_expr(_chips_rom([]))
+    assert ei.value.error_code == ERROR_CHIPSROM_NO_PROGRAM
+    assert ei.value.component_id == "c1"
+
+def test_chips_rom_program_larger_than_address_space_raises():
+    from ggl.errors import CircuitError, ERROR_CHIPSROM_OVERFLOW
+    with pytest.raises(CircuitError) as ei:
+        view._component_expr(_chips_rom([0x13] * 9, address_bits=3))
+    assert ei.value.error_code == ERROR_CHIPSROM_OVERFLOW
+    assert ei.value.additional_fields["words"] == 9
+    assert ei.value.additional_fields["capacity"] == 8

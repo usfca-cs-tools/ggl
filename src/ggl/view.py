@@ -28,6 +28,8 @@ from .errors import (
     CircuitError,
     ERROR_TUNNEL_MULTIPLE_DRIVERS,
     ERROR_TUNNEL_NO_DRIVER,
+    ERROR_CHIPSROM_NO_PROGRAM,
+    ERROR_CHIPSROM_OVERFLOW,
 )
 
 _GATE_CLASS = {
@@ -164,6 +166,21 @@ def _component_expr(comp, tunnel_dir=None):
     # --- memory ---
     if t == "register":
         return (f'memory.Register(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
+    if t == "chipsROM":
+        ab, words = int(p.get("addressBits", 6)), (p.get("words") or [])
+        if not words:
+            raise CircuitError(
+                component_id=js_id, component_type="chipsROM", component_label=label,
+                error_code=ERROR_CHIPSROM_NO_PROGRAM, label=label
+            )
+        if len(words) > (1 << ab):
+            raise CircuitError(
+                component_id=js_id, component_type="chipsROM", component_label=label,
+                error_code=ERROR_CHIPSROM_OVERFLOW, label=label, words=len(words), addressBits=ab, capacity=1 << ab
+            )
+        data = [int(words[i]) if i < len(words) else 0 for i in range(1 << ab)]
+        return (f'memory.ROM(label="{_esc(label)}", address_bits={ab}, data_bits=32, '
+                f'data={data}, js_id="{_esc(js_id)}")', None)
     if t == "rom":
         ab, db = int(p.get("addressBits", 4)), int(p.get("dataBits", 8))
         maxv, src = (1 << db) - 1, (p.get("data") or [])
