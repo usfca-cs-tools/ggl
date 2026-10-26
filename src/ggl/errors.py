@@ -15,6 +15,8 @@ ERROR_TUNNEL_NO_DRIVER = 'simulation.errors.tunnelNoDriver'
 ERROR_TUNNEL_MULTIPLE_DRIVERS = 'simulation.errors.tunnelMultipleDrivers'
 ERROR_INVALID_COMPONENT_TYPE = 'simulation.errors.invalidComponentType'
 ERROR_SIMULATION_TIMEOUT = 'simulation.errors.simulationTimeout'
+ERROR_CHIPSROM_NO_PROGRAM = 'simulation.errors.chipsRomNoProgram'
+ERROR_CHIPSROM_OVERFLOW = 'simulation.errors.chipsRomOverflow'
 
 # Warning message IDs
 WARNING_UNUSED_INPUT = 'simulation.warnings.unusedInput'
