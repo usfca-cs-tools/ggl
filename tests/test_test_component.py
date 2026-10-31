@@ -273,11 +273,14 @@ def make_loadable_counter():
 
 def test_reset_pulse_loads_known_state():
     # Pulsing CLR high for one cycle must load B into the register (== 7 here);
-    # without the reset the register would still read its power-up 0.
+    # without the reset the register would still read its power-up 0. A stop
+    # value that already holds after the reset runs zero cycles, so the check
+    # sees the just-reset state.
     c = make_loadable_counter()
     t = io.Test(label="reset", js_id="t1",
                 input_names=["B"], output_names=["count"], rows=[[7, 7]],
-                reset_enabled=True, reset_input_name="CLR")
+                reset_enabled=True, reset_input_name="CLR",
+                stop_enabled=True, stop_output_name="count", stop_output_value=7)
     assert t.evaluate(c)["passed"] is True
 
 
@@ -312,6 +315,64 @@ def test_reset_input_not_found():
         t.evaluate(c)
     assert ei.value.error_code == "testInputNotFound"
     assert ei.value.to_dict()["name"] == "NOPE"
+
+
+# --- Sequential mode (no stop condition on a clocked circuit) -------------------
+# Each row is one clock cycle and state carries between rows, so the rows can step
+# through a program (lab06's cumulative test: li t0,1; li t1,1; sub t0,t0,t1).
+
+def test_sequential_rows_carry_state_and_reset_once():
+    # Reset loads B=7 once; then each row clocks once: 8, 9, 10. A per-row reset
+    # would read 8 on every row.
+    c = make_loadable_counter()
+    t = io.Test(label="seq", js_id="t1",
+                input_names=["B"], output_names=["count"],
+                rows=[[7, 8], [7, 9], [7, 10]],
+                reset_enabled=True, reset_input_name="CLR")
+    assert t.evaluate(c)["passed"] is True
+
+
+def test_sequential_rows_drive_each_rows_inputs_before_its_clock():
+    # The row's inputs are what the clock edge loads: CLR=1 in a row loads that
+    # row's B, CLR=0 counts. No reset pulse — the table drives CLR itself.
+    c = make_loadable_counter()
+    t = io.Test(label="seq", js_id="t1",
+                input_names=["CLR", "B"], output_names=["count"],
+                rows=[[1, 20, 20], [0, 0, 21], [1, 5, 5], [0, 0, 6]])
+    assert t.evaluate(c)["passed"] is True
+
+
+def test_sequential_failing_row_reports_that_row():
+    c = make_loadable_counter()
+    t = io.Test(label="seq", js_id="t1",
+                input_names=["CLR", "B"], output_names=["count"],
+                rows=[[1, 20, 20], [0, 0, 99]])   # second row reads 21
+    with pytest.raises(CircuitError) as ei:
+        t.evaluate(c)
+    d = ei.value.to_dict()
+    assert ei.value.error_code == "testFailed"
+    assert (d["output"], d["expected"], d["actual"]) == ("count", 99, 21)
+    assert "CLR=0" in d["inputs"]
+
+
+def test_no_stop_without_a_clock_stays_combinational():
+    # The sequential rule needs a Clock; a combinational table is unchanged.
+    c = make_and_gate()
+    t = io.Test(label="and", js_id="t1",
+                input_names=["A", "B"], output_names=["Y"],
+                rows=[[0, 0, 0], [1, 1, 1], [1, 0, 0]])
+    assert t.evaluate(c)["passed"] is True
+
+
+def test_evaluate_async_matches_evaluate_for_sequential_test():
+    def seq():
+        return io.Test(label="seq", js_id="t1",
+                       input_names=["B"], output_names=["count"],
+                       rows=[[7, 8], [7, 9]],
+                       reset_enabled=True, reset_input_name="CLR")
+    sync_result = seq().evaluate(make_loadable_counter())
+    async_result = asyncio.run(seq().evaluate_async(make_loadable_counter()))
+    assert sync_result == async_result == {"label": "seq", "passed": True}
 
 
 # --- Cooperative (browser) path: evaluate_async ---------------------------------
