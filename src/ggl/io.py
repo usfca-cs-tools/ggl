@@ -288,13 +288,20 @@ class Test(Node):
     both the headless grading path (read the return value) and the interactive
     editor (the callback badges the component).
 
-    Two modes:
-      - combinational (default): each row is set-inputs, settle, check-outputs.
+    Three modes:
+      - combinational (no stop, circuit has no clock): each row is set-inputs,
+        settle, check-outputs.
+      - sequential (no stop, circuit has a clock): the sequential analog of a
+        combinational table. The reset pulse (if enabled) runs once, before the
+        first row; then each row sets the inputs, pulses the clock once, and
+        checks the outputs. State carries from row to row, so the rows can step
+        through a program one instruction at a time.
       - clocked (stop_enabled): each row sets the input columns as the initial
         state, then pulses the clock until the stop_output_name output reaches
         stop_output_value (capped at max_cycles), then checks the output columns
         at that point. For sequential circuits — e.g. a processor running until a
-        DONE signal goes high.
+        DONE signal goes high. A stop value that already holds after the reset
+        pulse runs zero cycles, so this also checks a just-reset state.
     """
 
     kind = 'Test'
@@ -389,6 +396,9 @@ class Test(Node):
         if self.reset_enabled:
             reset_node = self._resolve(
                 circuit.inputs, self.reset_input_name, 'testInputNotFound')
+        # Sequential: no stop condition on a clocked circuit, so each row is one
+        # clock cycle and state carries between rows (reset only before row 1).
+        sequential = not self.stop_enabled and circuit.clock is not None
 
         n_in = len(self.input_names)
         width = n_in + len(self.output_names)
@@ -432,8 +442,9 @@ class Test(Node):
                 circuit.run()
 
                 # Reset pulse: assert the reset input, clock it in, then deassert
-                # — so a sequential circuit starts from a known state.
-                if self.reset_enabled:
+                # — so a sequential circuit starts from a known state. Sequential
+                # rows build on each other, so only the first row resets.
+                if self.reset_enabled and not (sequential and i > 1):
                     drive([(reset_node, self.reset_value)])
                     for _ in range(self.reset_cycles):
                         circuit.cycle()
@@ -457,6 +468,11 @@ class Test(Node):
                                     value=self.stop_output_value,
                                     cycles=self.max_cycles)
                     stop_desc = f"{self.stop_output_name}={self.stop_output_value}"
+
+                # Sequential: one clock cycle per row, then check.
+                if sequential:
+                    circuit.cycle()
+                    yield  # cooperative breather (see evaluate_async)
 
                 for name, node, expected in zip(
                         self.output_names, out_nodes, out_vals):
