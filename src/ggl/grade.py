@@ -78,7 +78,9 @@ def _format_failure(d):
     names the offending thing and, where useful, what the circuit actually offers. Unknown
     engine errors fall back to a cleaned-up code so nothing shows a raw i18n key.
     """
-    code = d.get("error_code", "error")
+    # Engine errors carry an i18n key ("simulation.errors.tunnelNoDriver"); Test errors a bare
+    # code ("testFailed"). Compare on the bare code so both kinds match the branches below.
+    code = str(d.get("error_code", "error")).rsplit(".", 1)[-1]
     name = d.get("name")
     label = d.get("component_label")
 
@@ -107,6 +109,10 @@ def _format_failure(d):
         return f'FAIL: tunnel net "{d.get("label")}" has no driver'
     if code == "tunnelMultipleDrivers":
         return f'FAIL: tunnel net "{d.get("label")}" has more than one driver'
+    if code == "netMultipleDrivers":
+        where = f' in circuit "{d["circuit_name"]}"' if d.get("circuit_name") else ""
+        return (f'FAIL: a wire{where} is driven by {d.get("count")} outputs '
+                f'({d.get("drivers")}); only one output may drive a wire')
     # Any other engine error (open input, bit-width mismatch, short circuit, ...): strip the
     # "simulation.errors." i18n prefix so the student sees a plain code, plus context.
     plain = str(code).rsplit(".", 1)[-1]

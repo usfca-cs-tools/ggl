@@ -26,6 +26,7 @@ import re
 
 from .errors import (
     CircuitError,
+    ERROR_NET_MULTIPLE_DRIVERS,
     ERROR_TUNNEL_MULTIPLE_DRIVERS,
     ERROR_TUNNEL_NO_DRIVER,
     ERROR_CHIPSROM_NO_PROGRAM,
@@ -415,14 +416,49 @@ def _validate_tunnel_nets(components, tunnel_dirs):
                 component_label=label, error_code=ERROR_TUNNEL_NO_DRIVER, label=label)
 
 
-def _resolve_connections(wires, junctions, index):
+def _check_single_driver(outs, comp_of_var, circuit_name):
+    """Raise a CircuitError if a net has more than one driver (output port). Two outputs
+    wired together can't both set the wire's value, so the circuit can't be right — e.g. a
+    stray wire joining two of a subcircuit's output pins. Same-label subscriber tunnels on
+    one net carry the same value, so they count as one driver."""
+    drivers, seen = [], set()
+    for var, port in outs:
+        comp = comp_of_var.get(var, {})
+        props = comp.get("props", {}) or {}
+        key = (("tunnel", props.get("label", "")) if comp.get("type") == "tunnel"
+               else (var, port))
+        if key not in seen:
+            seen.add(key)
+            drivers.append((comp, port))
+    if len(drivers) < 2:
+        return
+
+    def describe(comp, port):
+        props = comp.get("props", {}) or {}
+        name = props.get("label") or comp.get("type", "?")
+        n_out = sum(1 for p in comp.get("ports", []) or [] if p.get("direction") == "output")
+        # A subcircuit's positional port is shown by its inner label (as resolved in the index).
+        return f"{name}.{port}" if n_out > 1 else name
+
+    (first, first_port), (second, _) = drivers[0], drivers[1]
+    raise CircuitError(
+        component_id=first.get("id"), component_type=first.get("type"),
+        component_label=(first.get("props", {}) or {}).get("label", ""),
+        error_code=ERROR_NET_MULTIPLE_DRIVERS, port_name=first_port,
+        connected_component_id=second.get("id"), circuit_name=circuit_name,
+        count=len(drivers), drivers=", ".join(describe(c, p) for c, p in drivers))
+
+
+def _resolve_connections(wires, junctions, index, comp_of_var=None, circuit_name=None):
     """Group wires into electrical nets and return (src, dst, wire_id) connections.
 
     A net is a maximal set of wires joined either by a shared endpoint coordinate or by
     a junction (a branch wire meeting another wire mid-run). Each net's ports are found
     by matching every endpoint against the port index; the net's one output drives each
     of its inputs. This subsumes both fan-out styles: multiple wires off one output port,
-    and junction branches off a trunk wire.
+    and junction branches off a trunk wire. With ``comp_of_var`` (var -> component dict),
+    a net with more than one driver raises a CircuitError rather than silently using the
+    first.
     """
     conns = []
     for net in _group_nets(wires, junctions):
@@ -438,6 +474,8 @@ def _resolve_connections(wires, junctions, index):
                         if port not in ins:
                             ins.append(port)
                         input_wire.setdefault(port, wires[i].get("id", ""))
+        if comp_of_var is not None and len(outs) > 1:
+            _check_single_driver(outs, comp_of_var, circuit_name)
         if outs and ins:
             src = outs[0]
             for dst in ins:
@@ -509,7 +547,8 @@ def _emit_body(components, wires, junctions, circ_var, subdefs, templates, lines
     lines.extend(value_inits)
 
     index = _port_index(components, var_of, subdefs, tunnel_dirs)
-    conns = _resolve_connections(wires, junctions, index)
+    comp_of_var = {var_of[c["id"]]: c for c in components if c.get("id") in var_of}
+    conns = _resolve_connections(wires, junctions, index, comp_of_var, circuit_name)
     if not is_top:
         _validate_interface_connected(components, var_of, conns, circuit_name)
     for (svar, sname), (dvar, dname), js in conns:
