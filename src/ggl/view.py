@@ -22,6 +22,7 @@ external ports are the inner circuit's Input/Output *labels* (see ggl.component.
 so a placement's positional port ("0","1",...) is mapped to the inner label by position.
 """
 
+import abc
 import re
 
 from .errors import (
@@ -32,17 +33,6 @@ from .errors import (
     ERROR_CHIPSROM_NO_PROGRAM,
     ERROR_CHIPSROM_OVERFLOW,
 )
-
-_GATE_CLASS = {
-    "and-gate": "And",
-    "or-gate": "Or",
-    "not-gate": "Not",
-    "nand-gate": "Nand",
-    "nor-gate": "Nor",
-    "xor-gate": "Xor",
-    "xnor-gate": "Xnor",
-}
-
 
 def _esc(s):
     return str(s).replace("\\", "\\\\").replace('"', '\\"')
@@ -74,7 +64,7 @@ def _r(v):
 class GgcPort:
     """A connection point on a component, positioned relative to that component"""
 
-    def __init__(self, data):
+    def __init__(self, data: dict):
         self.name = data.get("name")
         self.x = data.get("x", 0)
         self.y = data.get("y", 0)
@@ -88,10 +78,10 @@ class GgcComponent:
     read through prop().
     """
 
-    def __init__(self, data):
+    def __init__(self, data: dict):
         props = data.get("props", {}) or {}
         self.id = data.get("id", "")
-        self.type = data.get("type")
+        self.type: str = data.get("type", "")
         self.x = data.get("x", 0)
         self.y = data.get("y", 0)
         self.ports = [GgcPort(port) for port in data.get("ports", []) or []]
@@ -100,8 +90,7 @@ class GgcComponent:
         self.circuit_id = props.get("circuitId")
         # A tunnel's direction comes from its wiring, not its stored property. It is set by
         # _assign_tunnel_directions(), and stays None for every other kind of component.
-        self.tunnel_direction = None
-        self.raw = data
+        self.tunnel_direction: str | None = None
         self._props = props
 
     def prop(self, name, default=None):
@@ -127,155 +116,382 @@ def _parse_components(raw_components):
     return [GgcComponent(data) for data in raw_components or []]
 
 
-def _component_expr(comp, tunnel_dir=None):
-    """Return (construction_expr, value_init) for a leaf (non-subcircuit) component, or
-    (None, None) if the type isn't a runnable node. value_init is the int to assign to
-    ``.value`` after construction (sources), else None. ``tunnel_dir`` overrides a tunnel's
-    stored direction with the one inferred from its wiring (see _infer_tunnel_directions)."""
-    t = comp.get("type")
-    p = comp.get("props", {}) or {}
-    label = p.get("label", "")
-    bits = p.get("bits", 1)
-    js_id = comp.get("id", "")
+class ComponentEmitter(abc.ABC):
+    """
+    Emits the GGL expression which constructs one component's Node. The way a Gate
+    subclass supplies only logic(), a subclass here supplies only its GGL class and the
+    arguments which differ. Every Node takes a label first and a js_id last.
+    """
 
-    if t == "input":
-        return (f'io.Input(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")',
-                int(p.get("value", 0) or 0))
-    if t == "constant":
-        return (f'io.Constant(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")',
-                int(p.get("value", 0) or 0))
-    if t == "clock":
-        return (f'io.Clock(label="{_esc(label)}", frequency={p.get("frequency", 1)}, '
-                f'mode="{_esc(p.get("mode", "auto"))}", js_id="{_esc(js_id)}")', None)
-    if t == "output":
-        return (f'io.Output(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
-    if t == "probe":
-        # A Probe is a value observer, not an interface port (see io.Probe) -- structurally
-        # identical construction to Output, just a different engine class.
-        return (f'io.Probe(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
-    if t in _GATE_CLASS:
-        args = [f'label="{_esc(label)}"']
-        if bits != 1:
-            args.append(f"bits={bits}")
-        if p.get("numInputs") is not None:
-            args.append(f'num_inputs={int(p["numInputs"])}')
-        inverted = p.get("invertedInputs") or []
-        if inverted:
-            args.append(f"inverted_inputs={list(inverted)}")
-        args.append(f'js_id="{_esc(js_id)}"')
-        return (f'logic.{_GATE_CLASS[t]}({", ".join(args)})', None)
-    if t == "splitter":
-        splits = [(rg.get("start"), rg.get("end")) for rg in (p.get("ranges") or [])]
-        return (f'wires.Splitter(label="{_esc(label)}", bits={p.get("inputBits", 1)}, '
-                f'splits={splits}, js_id="{_esc(js_id)}")', None)
-    if t == "merger":
-        merges = [(rg.get("start"), rg.get("end")) for rg in (p.get("ranges") or [])]
-        return (f'wires.Merger(label="{_esc(label)}", bits={p.get("outputBits", 1)}, '
-                f'merge_inputs={merges}, js_id="{_esc(js_id)}")', None)
-    if t == "tunnel":
-        # A tunnel's direction is derived from what it's wired to (a tunnel fed by a driver
-        # publishes to the net -> input; one that drives a sink reads from it -> output), not
-        # from the stored prop. Same-label tunnels are joined inside the engine.
-        direction = tunnel_dir if tunnel_dir is not None else p.get("direction", "input")
-        return (f'wires.Tunnel(label="{_esc(label)}", '
-                f'direction="{_esc(direction)}", js_id="{_esc(js_id)}")', None)
+    ggc_type = ""
+    ggl_class = ""
 
-    # --- arithmetic ---
-    if t == "adder":
-        return (f'arithmetic.Adder(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
-    if t == "subtract":
-        return (f'arithmetic.Subtract(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
-    if t == "multiply":
-        return (f'arithmetic.Multiply(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
-    if t == "divide":
-        # The ggl class is Division (the TS generator emitted a nonexistent 'Divide').
-        return (f'arithmetic.Division(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
-    if t == "compare":
-        return (f'arithmetic.Comparator(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
-    if t == "shift":
-        # BarrelShifter wants direction + mode separately; the .ggc packs them into one
-        # field like "logical_left" / "arithmetic_right".
-        m = str(p.get("mode", "logical_left"))
-        direction = "right" if "right" in m else "left"
-        shift_mode = "arithmetic" if "arithmetic" in m else "logical"
-        return (f'arithmetic.BarrelShifter(label="{_esc(label)}", bits={bits}, '
-                f'direction="{direction}", mode="{shift_mode}", js_id="{_esc(js_id)}")', None)
-    if t == "signExtend":
-        # Distinct input/output widths (in_bits/out_bits), not the shared `bits`.
-        in_bits, out_bits = int(p.get("inBits", 1)), int(p.get("outBits", 1))
-        return (f'arithmetic.SignExtend(label="{_esc(label)}", in_bits={in_bits}, '
-                f'out_bits={out_bits}, js_id="{_esc(js_id)}")', None)
+    def __init__(self, comp: GgcComponent):
+        self.comp = comp
 
-    # --- plexers ---
-    if t == "multiplexer":
-        args = [f'label="{_esc(label)}"', f'selector_bits={int(p.get("selectorBits", 2))}']
-        if bits != 1:
-            args.append(f"bits={bits}")
-        args.append(f'js_id="{_esc(js_id)}"')
-        return (f'plexers.Multiplexer({", ".join(args)})', None)
-    if t == "decoder":
-        return (f'plexers.Decoder(label="{_esc(label)}", '
-                f'selector_bits={int(p.get("selectorBits", 2))}, js_id="{_esc(js_id)}")', None)
-    if t == "priorityEncoder":
-        return (f'plexers.PriorityEncoder(label="{_esc(label)}", '
-                f'selector_bits={int(p.get("selectorBits", 2))}, js_id="{_esc(js_id)}")', None)
+    @abc.abstractmethod
+    def arguments(self):
+        """The constructor arguments between label and js_id"""
 
-    # --- memory ---
-    if t == "register":
-        return (f'memory.Register(label="{_esc(label)}", bits={bits}, js_id="{_esc(js_id)}")', None)
-    if t == "chipsROM":
-        ab, words = int(p.get("addressBits", 6)), (p.get("words") or [])
+    def expression(self):
+        args = [f'label="{_esc(self.comp.label)}"']
+        args += self.arguments()
+        args.append(f'js_id="{_esc(self.comp.id)}"')
+        return f'{self.ggl_class}({", ".join(args)})'
+
+    def initial_value(self, is_top):
+        """The int to assign to the Node's .value after construction, or None"""
+        return None
+
+
+class BitsEmitter(ComponentEmitter):
+    """A component whose only argument is its bit width"""
+
+    def arguments(self):
+        return [f"bits={self.comp.bits}"]
+
+
+class InputEmitter(BitsEmitter):
+    ggc_type = "input"
+    ggl_class = "io.Input"
+
+    def stored_value(self):
+        return int(self.comp.prop("value", 0) or 0)
+
+    def initial_value(self, is_top):
+        # A subcircuit's own Inputs are interface ports driven by the parent
+        if is_top:
+            return self.stored_value()
+        return None
+
+
+class ConstantEmitter(InputEmitter):
+    ggc_type = "constant"
+    ggl_class = "io.Constant"
+
+    def initial_value(self, is_top):
+        return self.stored_value()
+
+
+class OutputEmitter(BitsEmitter):
+    ggc_type = "output"
+    ggl_class = "io.Output"
+
+
+class ProbeEmitter(BitsEmitter):
+    """A Probe is a value observer, not an interface port (see io.Probe)"""
+    ggc_type = "probe"
+    ggl_class = "io.Probe"
+
+
+class ClockEmitter(ComponentEmitter):
+    ggc_type = "clock"
+    ggl_class = "io.Clock"
+
+    def arguments(self):
+        frequency = self.comp.prop("frequency", 1)
+        mode = _esc(self.comp.prop("mode", "auto"))
+        return [f"frequency={frequency}", f'mode="{mode}"']
+
+
+class GateEmitter(ComponentEmitter):
+    """Every gate omits the arguments which are at their engine defaults"""
+
+    def arguments(self):
+        args = []
+        if self.comp.bits != 1:
+            args.append(f"bits={self.comp.bits}")
+        num_inputs = self.comp.prop("numInputs")
+        if num_inputs is not None:
+            args.append(f"num_inputs={int(num_inputs)}")
+        inverted_inputs = self.comp.prop("invertedInputs")
+        if inverted_inputs:
+            args.append(f"inverted_inputs={list(inverted_inputs)}")
+        return args
+
+
+class AndEmitter(GateEmitter):
+    ggc_type = "and-gate"
+    ggl_class = "logic.And"
+
+
+class OrEmitter(GateEmitter):
+    ggc_type = "or-gate"
+    ggl_class = "logic.Or"
+
+
+class NotEmitter(GateEmitter):
+    ggc_type = "not-gate"
+    ggl_class = "logic.Not"
+
+
+class NandEmitter(GateEmitter):
+    ggc_type = "nand-gate"
+    ggl_class = "logic.Nand"
+
+
+class NorEmitter(GateEmitter):
+    ggc_type = "nor-gate"
+    ggl_class = "logic.Nor"
+
+
+class XorEmitter(GateEmitter):
+    ggc_type = "xor-gate"
+    ggl_class = "logic.Xor"
+
+
+class XnorEmitter(GateEmitter):
+    ggc_type = "xnor-gate"
+    ggl_class = "logic.Xnor"
+
+
+class RangesEmitter(ComponentEmitter):
+    """A component which splits or merges a bus into (start, end) bit ranges"""
+
+    def ranges(self):
+        ranges = []
+        for bit_range in self.comp.prop("ranges") or []:
+            ranges.append((bit_range.get("start"), bit_range.get("end")))
+        return ranges
+
+
+class SplitterEmitter(RangesEmitter):
+    ggc_type = "splitter"
+    ggl_class = "wires.Splitter"
+
+    def arguments(self):
+        return [f'bits={self.comp.prop("inputBits", 1)}', f"splits={self.ranges()}"]
+
+
+class MergerEmitter(RangesEmitter):
+    ggc_type = "merger"
+    ggl_class = "wires.Merger"
+
+    def arguments(self):
+        return [f'bits={self.comp.prop("outputBits", 1)}', f"merge_inputs={self.ranges()}"]
+
+
+class TunnelEmitter(ComponentEmitter):
+    """Same-label tunnels are joined inside the engine"""
+    ggc_type = "tunnel"
+    ggl_class = "wires.Tunnel"
+
+    def arguments(self):
+        direction = self.comp.tunnel_direction
+        if direction is None:
+            direction = self.comp.prop("direction", "input")
+        return [f'direction="{_esc(direction)}"']
+
+
+class AdderEmitter(BitsEmitter):
+    ggc_type = "adder"
+    ggl_class = "arithmetic.Adder"
+
+
+class SubtractEmitter(BitsEmitter):
+    ggc_type = "subtract"
+    ggl_class = "arithmetic.Subtract"
+
+
+class MultiplyEmitter(BitsEmitter):
+    ggc_type = "multiply"
+    ggl_class = "arithmetic.Multiply"
+
+
+class DivideEmitter(BitsEmitter):
+    ggc_type = "divide"
+    ggl_class = "arithmetic.Division"
+
+
+class CompareEmitter(BitsEmitter):
+    ggc_type = "compare"
+    ggl_class = "arithmetic.Comparator"
+
+
+class ShiftEmitter(ComponentEmitter):
+    """BarrelShifter wants direction and mode separately; the .ggc packs them into one
+    field like "logical_left" or "arithmetic_right"."""
+    ggc_type = "shift"
+    ggl_class = "arithmetic.BarrelShifter"
+
+    def arguments(self):
+        packed_mode = str(self.comp.prop("mode", "logical_left"))
+        direction = "left"
+        if "right" in packed_mode:
+            direction = "right"
+        mode = "logical"
+        if "arithmetic" in packed_mode:
+            mode = "arithmetic"
+        return [f"bits={self.comp.bits}", f'direction="{direction}"', f'mode="{mode}"']
+
+
+class SignExtendEmitter(ComponentEmitter):
+    """Has distinct input and output widths, not the shared bits"""
+    ggc_type = "signExtend"
+    ggl_class = "arithmetic.SignExtend"
+
+    def arguments(self):
+        in_bits = int(self.comp.prop("inBits", 1))
+        out_bits = int(self.comp.prop("outBits", 1))
+        return [f"in_bits={in_bits}", f"out_bits={out_bits}"]
+
+
+class SelectorEmitter(ComponentEmitter):
+    """A plexer sized by its number of selector bits"""
+
+    def arguments(self):
+        return [f'selector_bits={int(self.comp.prop("selectorBits", 2))}']
+
+
+class MultiplexerEmitter(SelectorEmitter):
+    ggc_type = "multiplexer"
+    ggl_class = "plexers.Multiplexer"
+
+    def arguments(self):
+        args = super().arguments()
+        if self.comp.bits != 1:
+            args.append(f"bits={self.comp.bits}")
+        return args
+
+
+class DecoderEmitter(SelectorEmitter):
+    ggc_type = "decoder"
+    ggl_class = "plexers.Decoder"
+
+
+class PriorityEncoderEmitter(SelectorEmitter):
+    ggc_type = "priorityEncoder"
+    ggl_class = "plexers.PriorityEncoder"
+
+
+class RegisterEmitter(BitsEmitter):
+    ggc_type = "register"
+    ggl_class = "memory.Register"
+
+
+class ChipsRomEmitter(ComponentEmitter):
+    """A ROM of 32-bit instruction words, which must hold a program that fits"""
+    ggc_type = "chipsROM"
+    ggl_class = "memory.ROM"
+
+    def check_program(self, words, capacity):
+        comp = self.comp
         if not words:
             raise CircuitError(
-                component_id=js_id, component_type="chipsROM", component_label=label,
-                error_code=ERROR_CHIPSROM_NO_PROGRAM, label=label
-            )
-        if len(words) > (1 << ab):
+                component_id=comp.id, component_type=comp.type, component_label=comp.label,
+                error_code=ERROR_CHIPSROM_NO_PROGRAM, label=comp.label)
+        if len(words) > capacity:
             raise CircuitError(
-                component_id=js_id, component_type="chipsROM", component_label=label,
-                error_code=ERROR_CHIPSROM_OVERFLOW, label=label, words=len(words), addressBits=ab, capacity=1 << ab
-            )
-        data = [int(words[i]) if i < len(words) else 0 for i in range(1 << ab)]
-        return (f'memory.ROM(label="{_esc(label)}", address_bits={ab}, data_bits=32, '
-                f'data={data}, js_id="{_esc(js_id)}")', None)
-    if t == "rom":
-        ab, db = int(p.get("addressBits", 4)), int(p.get("dataBits", 8))
-        maxv, src = (1 << db) - 1, (p.get("data") or [])
-        data = [max(0, min(int(src[i]), maxv)) if i < len(src) else 0 for i in range(1 << ab)]
-        return (f'memory.ROM(label="{_esc(label)}", address_bits={ab}, data_bits={db}, '
-                f'data={data}, js_id="{_esc(js_id)}")', None)
-    if t == "ram":
-        ab, db = int(p.get("addressBits", 4)), int(p.get("dataBits", 8))
-        return (f'memory.RAM(label="{_esc(label)}", address_bits={ab}, data_bits={db}, '
-                f'js_id="{_esc(js_id)}")', None)
+                component_id=comp.id, component_type=comp.type, component_label=comp.label,
+                error_code=ERROR_CHIPSROM_OVERFLOW, label=comp.label, words=len(words),
+                addressBits=self.address_bits(), capacity=capacity)
 
-    # --- verification directive (not a circuit node; has no ports) ---
-    if t == "test":
-        table = p.get("table") or {}
-        args = [
-            f'label="{_esc(label)}"',
+    def address_bits(self):
+        return int(self.comp.prop("addressBits", 6))
+
+    def arguments(self):
+        address_bits = self.address_bits()
+        capacity = 1 << address_bits
+        words = self.comp.prop("words") or []
+        self.check_program(words, capacity)
+        data = [0] * capacity
+        for i, word in enumerate(words):
+            data[i] = int(word)
+        return [f"address_bits={address_bits}", "data_bits=32", f"data={data}"]
+
+
+class RomEmitter(ComponentEmitter):
+    """Pads the data to the address space, and clamps each value to the data width"""
+    ggc_type = "rom"
+    ggl_class = "memory.ROM"
+
+    def arguments(self):
+        address_bits = int(self.comp.prop("addressBits", 4))
+        data_bits = int(self.comp.prop("dataBits", 8))
+        capacity = 1 << address_bits
+        max_value = (1 << data_bits) - 1
+        stored = self.comp.prop("data") or []
+        data = [0] * capacity
+        for i, value in enumerate(stored[:capacity]):
+            data[i] = max(0, min(int(value), max_value))
+        return [f"address_bits={address_bits}", f"data_bits={data_bits}", f"data={data}"]
+
+
+class RamEmitter(ComponentEmitter):
+    ggc_type = "ram"
+    ggl_class = "memory.RAM"
+
+    def arguments(self):
+        address_bits = int(self.comp.prop("addressBits", 4))
+        data_bits = int(self.comp.prop("dataBits", 8))
+        return [f"address_bits={address_bits}", f"data_bits={data_bits}"]
+
+
+class TestEmitter(ComponentEmitter):
+    """A verification directive, not a circuit node. It has no ports."""
+    ggc_type = "test"
+    ggl_class = "io.Test"
+
+    def table_arguments(self):
+        table = self.comp.prop("table") or {}
+        return [
             f'input_names={_str_list(table.get("inputNames") or [])}',
             f'output_names={_str_list(table.get("outputNames") or [])}',
             f'rows={_row_list(table.get("rows") or [])}',
         ]
-        if p.get("stop_enabled"):
-            args += [
-                "stop_enabled=True",
-                f'stop_output_name="{_esc(p.get("stop_output_name", ""))}"',
-                f'stop_output_value={int(p.get("stop_output_value") or 0)}',
-                # Cap on how long a stuck clocked test waits before failing. Default 1000
-                # (matches io.Test) so an unreached stop condition surfaces quickly.
-                f'max_cycles={int(p.get("max_cycles") or 1000)}',
-            ]
-        if p.get("reset_enabled"):
-            args += [
-                "reset_enabled=True",
-                f'reset_input_name="{_esc(p.get("reset_input_name", ""))}"',
-            ]
-        args.append(f'js_id="{_esc(js_id)}"')
-        return (f'io.Test({", ".join(args)})', None)
 
-    return (None, None)
+    def stop_arguments(self):
+        if not self.comp.prop("stop_enabled"):
+            return []
+        return [
+            "stop_enabled=True",
+            f'stop_output_name="{_esc(self.comp.prop("stop_output_name", ""))}"',
+            f'stop_output_value={int(self.comp.prop("stop_output_value") or 0)}',
+            # Cap on how long a stuck clocked test waits before failing. Default 1000
+            # (matches io.Test) so an unreached stop condition surfaces quickly.
+            f'max_cycles={int(self.comp.prop("max_cycles") or 1000)}',
+        ]
+
+    def reset_arguments(self):
+        if not self.comp.prop("reset_enabled"):
+            return []
+        return [
+            "reset_enabled=True",
+            f'reset_input_name="{_esc(self.comp.prop("reset_input_name", ""))}"',
+        ]
+
+    def arguments(self):
+        return self.table_arguments() + self.stop_arguments() + self.reset_arguments()
+
+
+_EMITTERS = {emitter.ggc_type: emitter for emitter in (
+    InputEmitter, ConstantEmitter, OutputEmitter, ProbeEmitter, ClockEmitter,
+    AndEmitter, OrEmitter, NotEmitter, NandEmitter, NorEmitter, XorEmitter, XnorEmitter,
+    SplitterEmitter, MergerEmitter, TunnelEmitter,
+    AdderEmitter, SubtractEmitter, MultiplyEmitter, DivideEmitter, CompareEmitter,
+    ShiftEmitter, SignExtendEmitter,
+    MultiplexerEmitter, DecoderEmitter, PriorityEncoderEmitter,
+    RegisterEmitter, ChipsRomEmitter, RomEmitter, RamEmitter, TestEmitter,
+)}
+
+
+def _emitter_for(comp: GgcComponent):
+    """The emitter for a component, or None if its type isn't a runnable node"""
+    emitter = _EMITTERS.get(comp.type)
+    if emitter is None:
+        return None
+    return emitter(comp)
+
+
+def _component_expr(data, tunnel_dir=None):
+    """Return (construction_expr, value_init) for one component's JSON, or (None, None) if
+    its type isn't a runnable node. Used by tests."""
+    comp = GgcComponent(data)
+    comp.tunnel_direction = tunnel_dir
+    emitter = _emitter_for(comp)
+    if emitter is None:
+        return (None, None)
+    return (emitter.expression(), emitter.initial_value(is_top=True))
 
 
 def _inner_labels(subdefs, circuit_id, direction):
@@ -527,7 +743,9 @@ def _resolve_connections(wires, junctions, index, comp_of_var=None, circuit_name
     """
     conns = []
     for net in _group_nets(wires, junctions):
-        outs, ins, input_wire = [], [], {}
+        outs: list = []
+        ins: list = []
+        input_wire: dict = {}
         for i in net:
             for key in _endpoints(wires[i]):
                 for (var, name, direction) in index.get(key, []):
@@ -597,15 +815,14 @@ def _emit_body(components, wires, junctions, circ_var, subdefs, templates, lines
             var_of[comp.id] = var
             lines.append(f"{var} = {tvar}()")
             continue
-        expr, init = _component_expr(comp.raw, tunnel_dir=comp.tunnel_direction)
-        if expr is None:
+        emitter = _emitter_for(comp)
+        if emitter is None:
             continue
         var = _var(comp.id)
         var_of[comp.id] = var
-        lines.append(f"{var} = {expr}")
-        # A subcircuit's own Input nodes are interface ports driven by the parent, so
-        # only set a value for top-level inputs; constants always carry their value.
-        if init is not None and (comp.type != "input" or is_top):
+        lines.append(f"{var} = {emitter.expression()}")
+        init = emitter.initial_value(is_top)
+        if init is not None:
             value_inits.append(f"{var}.value = {init}")
     lines.extend(value_inits)
 
@@ -646,12 +863,12 @@ def generate(ggc, mode="run"):
         "from ggl import arithmetic, circuit, component, io, logic, memory, plexers, wires"
     ]
 
-    templates = {}  # circuitId -> template variable name
+    templates: dict = {}  # circuitId -> template variable name
     # circuitIds whose templates are being emitted, outermost first. A .ggc names subcircuits
     # by reference, so a circuit can (directly or through others) place itself — something the
     # GGL API can't express, since a Component instance is a snapshot copy. Resolving the
     # references is where such a cycle exists, so it's caught here rather than recursing forever.
-    in_progress = []
+    in_progress: list = []
 
     def _name_of(circuit_id):
         return subdefs[circuit_id].get('definition', {}).get('name', circuit_id)
