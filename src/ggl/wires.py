@@ -104,21 +104,17 @@ class Tunnel(WireNode):
         )
 
         self.direction = direction
-        # Owning Circuit, set by Circuit.connect() (top level) or _clone_circuit() (embedded
-        # instance). Same-label tunnels join within THIS circuit only (see propagate()), so a
-        # subcircuit's internal tunnels resolve among its own nodes — not through a global
-        # registry, which cloning bypassed and which would cross-talk between instances.
-        self.circuit = None
 
     def is_output_tunnel(self):
         return self.direction == 'output'
     
     def propagate(self, output_name='0', value=0):
-        if not self.label or self.direction != 'input' or self.circuit is None:
+        if not self.label or self.direction != 'input' or self.owner is None:
             return []
 
         # Read the driving edge at whatever width the driver produced and republish it to
-        # every same-label subscriber IN THIS CIRCUIT. The tunnel imposes no width of its
+        # every same-label subscriber IN THIS CIRCUIT, not through a global registry, which
+        # would cross-talk between subcircuit instances. The tunnel imposes no width of its
         # own, so the value crosses intact; a genuine width mismatch surfaces where the net
         # is finally read.
         edge = self.inputs.get_edge('0')
@@ -127,7 +123,7 @@ class Tunnel(WireNode):
 
         logger.info_enabled and logger.info(f'{self.kind} {self.label} (input): publishing {bin(edge.value)} ({edge.bits} bits)')
         work = []
-        for sink in self._sinks_for(self.circuit).get(self.label, []):
+        for sink in self._sinks_for(self.owner).get(self.label, []):
             work += sink.receive(edge.value, edge.bits)
         return work
 

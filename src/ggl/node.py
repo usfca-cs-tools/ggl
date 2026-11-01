@@ -119,12 +119,19 @@ class Node:
     in the circuit
     """
 
+    # Members that refer to a whole Circuit, which __deepcopy__ must not walk
+    members_not_copied: tuple[str, ...] = ('owner',)
+
     def __init__(self, kind, js_id='', innames=[], outnames=[], label=''):
         self.kind = kind    # Hard-coded, e.g. 'And Gate'
         self.js_id = js_id  # Optionally provided be the frontend
         self.label = label  # User-provided, e.g. 'is b-type'
         self.inputs = NodeInputs(innames, self)
         self.outputs = NodeOutputs(outnames, self)
+        # The Circuit this node belongs to, for nodes that need to reach it: an Input
+        # re-propagates when assigned, and a Tunnel joins same-label tunnels. Set by
+        # Circuit.connect(), or by CircuitNode when cloning a subcircuit.
+        self.owner = None
 
     def __str__(self):
         return f'{self.kind} {self.label}'
@@ -210,7 +217,7 @@ class Node:
     def __deepcopy__(self, memo):
         """Deep-copy this node's OWN state only, never its edges.
 
-        An edge references the nodes it joins and a node's `.circuit` points back at the
+        An edge references the nodes it joins and a node's `.owner` points back at the
         whole Circuit, so a naive deepcopy walks the entire connected graph — O(graph) per
         node and deep enough on large nested circuits to overflow the recursion limit.
         Instead we copy the intrinsic attributes (bits, ROM/register contents, js_id, …)
@@ -226,8 +233,8 @@ class Node:
                 new.inputs = NodeInputs(list(value.points.keys()), new)
             elif key == "outputs":
                 new.outputs = NodeOutputs(list(value.points.keys()), new)
-            elif key == "circuit":
-                new.circuit = None  # back-reference; the caller reassigns it
+            elif key in self.members_not_copied:
+                new.__dict__[key] = None  # the caller reassigns it
             else:
                 new.__dict__[key] = copy.deepcopy(value, memo)
         return new

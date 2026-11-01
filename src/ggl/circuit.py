@@ -242,7 +242,7 @@ class Circuit:
         total = 0
         for n in self.all_nodes:
             total += 1
-            sub = getattr(n, "circuit", None)
+            sub = getattr(n, "subcircuit", None)
             if hasattr(n, "_input_mapping") and sub is not None:
                 total += sub._deep_node_count()
         return total
@@ -350,7 +350,7 @@ class Circuit:
             # Clock is driven by the circuit and a Constant never changes, so neither reads
             # it and neither gets one.
             if srcnode.kind == Input.kind:
-                srcnode.circuit = self
+                srcnode.owner = self
         if destnode.kind == Output.kind and destnode not in self.outputs:
             self.outputs.append(destnode)
 
@@ -359,10 +359,9 @@ class Circuit:
             if node not in self.all_nodes:
                 self.all_nodes.append(node)
             # A tunnel resolves its net within its owning circuit (see Tunnel.propagate), so
-            # it needs a back-reference to this circuit. Scope this to tunnels: other nodes
-            # don't need it, and CircuitNode.circuit means something else entirely.
+            # it needs a back-reference to this circuit.
             if node.kind == Tunnel.kind:
-                node.circuit = self
+                node.owner = self
 
         # Keep the Clock node for running the circuit
         if srcnode.kind == Clock.kind:

@@ -29,9 +29,6 @@ class IONode(BitsNode):
             label=label,
             bits=bits)
         self._value = 0
-        # Set by Circuit.connect() for top-level Input nodes so that assigning
-        # to .value can re-propagate the circuit (dynamic inputs at runtime).
-        self.circuit = None
 
     @property
     def value(self):
@@ -72,7 +69,7 @@ class Input(IONode):
         """
         if self._value != new_value:
             self._value = new_value
-            c = self.circuit
+            c = self.owner
             if (c is not None and getattr(c, 'auto_propagate', False)
                     and c.running and not c._in_step):
                 c.step()
