@@ -70,7 +70,7 @@ class Input(IONode):
         if self._value != new_value:
             self._value = new_value
             c = self.owner
-            if (c is not None and getattr(c, 'auto_propagate', False)
+            if (c is not None and c.auto_propagate
                     and c.running and not c._in_step):
                 c.step()
 

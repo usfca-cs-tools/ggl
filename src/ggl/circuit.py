@@ -24,7 +24,7 @@ def _tag_circuit_context(err, node, fallback_name):
     already carries a circuit or there's no context to add, so callers can test
     identity to decide whether to re-raise a new error.
     """
-    ctx_name = getattr(node, 'circuit_name', None) or fallback_name
+    ctx_name = node.circuit_name or fallback_name
     if err.circuit_name or not ctx_name:
         return err
     return CircuitError(

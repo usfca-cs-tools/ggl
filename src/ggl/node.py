@@ -55,7 +55,7 @@ class NodeInputs:
                 component_label=node.label,
                 error_code="inputShortCircuit",
                 port_name=name,
-                connected_component_id=getattr(driver, 'js_id', None),
+                connected_component_id=driver.js_id,
             )
         self.points[name] = edge
 
@@ -132,6 +132,8 @@ class Node:
         # re-propagates when assigned, and a Tunnel joins same-label tunnels. Set by
         # Circuit.connect(), or by CircuitNode when cloning a subcircuit.
         self.owner = None
+        # The subcircuit this node was cloned into, so an error can name it. None at top level.
+        self.circuit_name = None
 
     def __str__(self):
         return f'{self.kind} {self.label}'
@@ -243,7 +245,7 @@ class Node:
         """Create a disconnected copy of this node with an instance-suffixed label.
         Connections are cleared by __deepcopy__; the caller rewires the clone."""
         node = copy.deepcopy(self)
-        if getattr(node, "label", None):
+        if node.label:
             node.label = f"{node.label}_{instance_id}"
         return node
 

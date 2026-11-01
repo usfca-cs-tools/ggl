@@ -228,7 +228,7 @@ class CircuitNode(Node):
         )
         # Carry the subcircuit tag so a width-mismatch at this boundary names the subcircuit
         # the port lives in, not the flattened top circuit.
-        child_input.circuit_name = getattr(old_input, 'circuit_name', None)
+        child_input.circuit_name = old_input.circuit_name
 
         # Copy output edges from old input to new ChildInput
         for output_name, edges in old_input.outputs.points.items():
