@@ -148,3 +148,20 @@ def test_mis_named_output_names_the_label_and_lists_available():
     assert not ok
     assert 'no output labeled "WRONG"' in msg
     assert "COUNT" in msg
+
+
+def test_engine_error_codes_get_their_sentence_not_the_fallback():
+    # Engine errors carry an i18n key ("simulation.errors.X"); _format_failure must still
+    # match them to their sentence (the tunnel sentences were unreachable before).
+    assert grade._format_failure({
+        "error_code": "simulation.errors.tunnelNoDriver", "label": "x10",
+    }) == 'FAIL: tunnel net "x10" has no driver'
+    assert grade._format_failure({
+        "error_code": "simulation.errors.netMultipleDrivers", "count": 2,
+        "drivers": "RegFile.X30, RegFile.X20", "circuit_name": "lab07-part1",
+    }) == ('FAIL: a wire in circuit "lab07-part1" is driven by 2 outputs '
+           '(RegFile.X30, RegFile.X20); only one output may drive a wire')
+    # An engine code with no sentence still falls back to the plain code.
+    assert grade._format_failure({
+        "error_code": "simulation.errors.bitWidthMismatch", "component_label": "g",
+    }) == 'FAIL: bitWidthMismatch in component "g"'

@@ -631,6 +631,57 @@ def test_tunnel_net_with_two_drivers_raises():
     assert ei.value.error_code == "simulation.errors.tunnelMultipleDrivers"
 
 
+def _join_outputs(ggc, a=(1, 0), b=(1, 4), wire_id="short"):
+    """Add a wire from point a to point b (by default, input A's output pin to input B's)."""
+    ggc["wires"].append(
+        {"id": wire_id, "startConnection": {"pos": {"x": a[0], "y": a[1]}, "portType": "output"},
+         "endConnection": {"pos": {"x": b[0], "y": b[1]}, "portType": "output"}})
+    return ggc
+
+
+def test_net_with_two_drivers_raises():
+    # A stray wire joins input A's and input B's outputs, so one net (feeding both AND
+    # inputs) has two drivers. It used to silently take the first; now it fails loudly
+    # (lab07: stray wires along a subcircuit's pin column shorted X0/X10/X20/X30 together).
+    from ggl.errors import CircuitError
+    with pytest.raises(CircuitError) as ei:
+        view.generate(_join_outputs(_and_ggc(1, 0)))
+    err = ei.value
+    assert err.error_code == "simulation.errors.netMultipleDrivers"
+    d = err.to_dict()
+    assert (d["component_id"], d["connected_component_id"]) == ("A", "B")
+    assert d["count"] == 2 and d["drivers"] == "A, B"
+
+
+def test_two_outputs_wired_together_raise_even_with_no_sink():
+    # Two outputs shorted with nothing reading the wire still can't be right.
+    from ggl.errors import CircuitError
+    ggc = _and_ggc(1, 0)
+    ggc["wires"] = [w for w in ggc["wires"] if w["id"] != "w2"]  # B now feeds only the short
+    ggc["components"].append(
+        {"id": "C", "type": "input", "x": 0, "y": 8,
+         "props": {"label": "C", "bits": 1, "value": 0},
+         "ports": [{"name": "0", "x": 1, "y": 0, "direction": "output"}]})
+    with pytest.raises(CircuitError) as ei:
+        view.generate(_join_outputs(ggc, a=(1, 4), b=(1, 8)))
+    assert ei.value.error_code == "simulation.errors.netMultipleDrivers"
+    assert ei.value.to_dict()["drivers"] == "B, C"
+
+
+def test_same_label_subscriber_tunnels_on_one_net_are_one_driver():
+    # Two subscriber tunnels labelled N on the wire into Y both carry N's value, so they
+    # are not contending drivers; the circuit runs as before.
+    ggc = _tunnel_ggc(1)
+    ggc["components"].append(
+        {"id": "TS2", "type": "tunnel", "x": 5, "y": 2,
+         "props": {"label": "N", "bits": 1, "direction": "output"},
+         "ports": [{"name": "0", "x": 0, "y": 0, "direction": "output"}]})
+    ggc["wires"].append(
+        {"id": "w3", "startConnection": {"pos": {"x": 5, "y": 2}, "portType": "output"},
+         "endConnection": {"pos": {"x": 7, "y": 0}, "portType": "input"}})
+    assert _output(_run(view.generate(ggc)), "Y").value == 1
+
+
 def test_tunnel_nets_are_isolated_per_program():
     # Tunnels join within their own Circuit (no process-global registry), so running one
     # program after another in the same process can't leak: label "N"=1 then "N"=0 back to
