@@ -1,8 +1,14 @@
+from __future__ import annotations
+
 import copy
-import logging
+from typing import TYPE_CHECKING, Any
 
 from .ggl_logging import new_logger
 from .errors import CircuitError
+
+if TYPE_CHECKING:
+    from .circuit import Circuit
+    from .edge import Edge
 
 logger = new_logger(__name__)
 
@@ -32,7 +38,7 @@ class NodeInputs:
     """
 
     def __init__(self, names, node):
-        self.points = {name: None for name in names}
+        self.points: dict[str, Edge | None] = {name: None for name in names}
         self.node = node
 
     def get_edge(self, name):
@@ -64,7 +70,9 @@ class NodeInputs:
 
     def read_value(self, name, bits):
         # Read the value from the edge connected to the named inpoint
-        edge = self.points[name]
+        # An unconnected input has no edge. safe_read_input() catches the AttributeError
+        # from that, which keeps this hot path free of a None check.
+        edge: Any = self.points[name]
         # edge.bits is None means unvisited, so don't raise for that
         if edge.bits is not None and bits != edge.bits:
             raise BitWidthMismatch(bits, edge.bits)
@@ -88,7 +96,7 @@ class NodeOutputs:
     """
 
     def __init__(self, names, node):
-        self.points = {name: [] for name in names}
+        self.points: dict[str, list[Edge]] = {name: [] for name in names}
         self.node = node
 
     def append_edge(self, name, obj):
@@ -131,9 +139,9 @@ class Node:
         # The Circuit this node belongs to, for nodes that need to reach it: an Input
         # re-propagates when assigned, and a Tunnel joins same-label tunnels. Set by
         # Circuit.connect(), or by CircuitNode when cloning a subcircuit.
-        self.owner = None
+        self.owner: Circuit | None = None
         # The subcircuit this node was cloned into, so an error can name it. None at top level.
-        self.circuit_name = None
+        self.circuit_name: str | None = None
 
     def __str__(self):
         return f'{self.kind} {self.label}'
@@ -320,7 +328,7 @@ def _sugar_getattribute(self, name):
 
 def enable_sugar():
     """Turn on `node.<portname>` attribute sugar (for hand-authored circuits)."""
-    Node.__getattribute__ = _sugar_getattribute
+    Node.__getattribute__ = _sugar_getattribute  # type: ignore[method-assign]
 
 
 def disable_sugar():

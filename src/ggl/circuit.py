@@ -55,7 +55,7 @@ class Circuit:
         # deterministic. A set here makes object iteration order vary per run,
         # which non-deterministically changes how feedback (latches) settle.
         self.all_nodes = []
-        self.clock: Clock = None
+        self.clock: Clock | None = None
         self.running = False  # set True by run()/run_async()
         # A user-requested abort. Unlike `running` (which run()/cycle() flip back
         # on each call), this stays set until a fresh Circuit is built, so it can
