@@ -123,23 +123,9 @@ class Tunnel(WireNode):
 
         logger.info_enabled and logger.info(f'{self.kind} {self.label} (input): publishing {bin(edge.value)} ({edge.bits} bits)')
         work = []
-        for sink in self._sinks_for(self.owner).get(self.label, []):
+        for sink in self.owner.tunnel_sinks(self.label):
             work += sink.receive(edge.value, edge.bits)
         return work
-
-    @staticmethod
-    def _sinks_for(circuit):
-        """Map label -> [output tunnels] for `circuit`, built once and cached on the circuit.
-        The tunnel graph is fixed once construction/connect finish (before any run), so a
-        single scan of all_nodes suffices — no per-pass rescans, no process-global state."""
-        sinks = getattr(circuit, '_tunnel_sinks', None)
-        if sinks is None:
-            sinks = {}
-            for node in circuit.all_nodes:
-                if getattr(node, 'kind', None) == 'Tunnel' and node.direction == 'output' and node.label:
-                    sinks.setdefault(node.label, []).append(node)
-            circuit._tunnel_sinks = sinks
-        return sinks
 
     def receive(self, value, bits):
         if self.direction != 'output':

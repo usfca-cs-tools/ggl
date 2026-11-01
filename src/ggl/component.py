@@ -60,6 +60,9 @@ class CircuitNode(Node):
         self._output_mapping = {
             o.label: f"{o.label}_{instance_id}" for o in template.outputs}
 
+    def deep_node_count(self):
+        return 1 + self.subcircuit.deep_node_count()
+
     def _clone_circuit(self, template, instance_id):
         """
         Create a deep copy of the template circuit with independent state.

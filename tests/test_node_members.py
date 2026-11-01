@@ -1,7 +1,7 @@
 """Members declared on Node and its subclasses, and how copying treats them."""
 import copy
 
-from ggl import circuit, io, logic
+from ggl import circuit, io, logic, wires
 
 
 def _inverter_template():
@@ -12,6 +12,30 @@ def _inverter_template():
     template.connect(a.output("0"), inverter.input("0"))
     template.connect(inverter.output("0"), out.input("0"))
     return template
+
+
+def test_deep_node_count_includes_embedded_subcircuits():
+    top = circuit.Circuit()
+    a = io.Input(label="a")
+    instance = circuit.Component(_inverter_template())()
+    top.connect(a.output("0"), instance.input("a"))
+    # The Input, the CircuitNode, and the three nodes inside it
+    assert top.deep_node_count() == 5
+
+
+def test_tunnel_sinks_finds_output_tunnels_by_label():
+    top = circuit.Circuit()
+    a = io.Input(label="a")
+    publisher = wires.Tunnel(label="t", direction="input")
+    subscriber = wires.Tunnel(label="t", direction="output")
+    other = wires.Tunnel(label="u", direction="output")
+    out = io.Output(label="o")
+    other_out = io.Output(label="p")
+    top.connect(a.output("0"), publisher.input("0"))
+    top.connect(subscriber.output("0"), out.input("0"))
+    top.connect(other.output("0"), other_out.input("0"))
+    assert top.tunnel_sinks("t") == [subscriber]
+    assert top.tunnel_sinks("missing") == []
 
 
 def test_every_node_starts_without_an_owner():

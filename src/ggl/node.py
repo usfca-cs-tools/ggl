@@ -138,6 +138,14 @@ class Node:
     def __str__(self):
         return f'{self.kind} {self.label}'
 
+    def deep_node_count(self):
+        """How many nodes this one amounts to, counting any embedded subcircuit."""
+        return 1
+
+    def is_output_tunnel(self):
+        """True for a tunnel which reads its value from a same-label tunnel."""
+        return False
+
     def get_input_edge(self, name):
         return self.inputs.get_edge(name)
 
