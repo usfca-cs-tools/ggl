@@ -71,6 +71,62 @@ def _r(v):
     return round(float(v), 3)
 
 
+class GgcPort:
+    """A connection point on a component, positioned relative to that component"""
+
+    def __init__(self, data):
+        self.name = data.get("name")
+        self.x = data.get("x", 0)
+        self.y = data.get("y", 0)
+        self.direction = data.get("direction")
+
+
+class GgcComponent:
+    """
+    One component from a .ggc file. The JSON is parsed here, once, so the rest of this
+    module works with declared members. Properties specific to one component type are
+    read through prop().
+    """
+
+    def __init__(self, data):
+        props = data.get("props", {}) or {}
+        self.id = data.get("id", "")
+        self.type = data.get("type")
+        self.x = data.get("x", 0)
+        self.y = data.get("y", 0)
+        self.ports = [GgcPort(port) for port in data.get("ports", []) or []]
+        self.label = props.get("label", "")
+        self.bits = props.get("bits", 1)
+        self.circuit_id = props.get("circuitId")
+        # A tunnel's direction comes from its wiring, not its stored property. It is set by
+        # _assign_tunnel_directions(), and stays None for every other kind of component.
+        self.tunnel_direction = None
+        self.raw = data
+        self._props = props
+
+    def prop(self, name, default=None):
+        return self._props.get(name, default)
+
+    def is_tunnel(self):
+        return self.type == "tunnel"
+
+    def is_subcircuit(self):
+        return self.type == "schematic-component"
+
+    def port_position(self, port):
+        """The port's absolute coordinate, rounded for matching against wire endpoints"""
+        return (_r(self.x + port.x), _r(self.y + port.y))
+
+    def port_direction(self, port):
+        if self.tunnel_direction is not None:
+            return self.tunnel_direction
+        return port.direction
+
+
+def _parse_components(raw_components):
+    return [GgcComponent(data) for data in raw_components or []]
+
+
 def _component_expr(comp, tunnel_dir=None):
     """Return (construction_expr, value_init) for a leaf (non-subcircuit) component, or
     (None, None) if the type isn't a runnable node. value_init is the int to assign to
@@ -225,38 +281,42 @@ def _component_expr(comp, tunnel_dir=None):
 def _inner_labels(subdefs, circuit_id, direction):
     """Ordered inner Input/Output labels of a subcircuit — the port names its
     CircuitNode exposes."""
-    inner = (subdefs.get(circuit_id, {}).get("circuit", {}) or {}).get("components", []) or []
-    want = "input" if direction == "input" else "output"
-    return [c.get("props", {}).get("label", "") for c in inner if c.get("type") == want]
+    inner = subdefs.get(circuit_id, {}).get("circuit", {}) or {}
+    if direction == "input":
+        wanted_type = "input"
+    else:
+        wanted_type = "output"
+    labels = []
+    for comp in _parse_components(inner.get("components")):
+        if comp.type == wanted_type:
+            labels.append(comp.label)
+    return labels
 
 
-def _port_index(components, var_of, subdefs, tunnel_dirs=None):
-    """Map rounded absolute coordinate (x, y) -> list of (var, port_name, direction).
-    For a schematic-component the positional port name is translated to the inner
-    circuit's label so it matches the CircuitNode's port. A tunnel's port direction is
-    taken from ``tunnel_dirs`` (inferred from wiring) so the resolver buckets it as
-    driver vs sink consistently with the emitted node."""
-    tunnel_dirs = tunnel_dirs or {}
-    index = {}
+def _external_port_name(comp, port, direction, subdefs):
+    """A subcircuit placement names its ports by position ("0", "1", ...), but its
+    CircuitNode names them by the inner circuit's labels, so translate. Every other
+    component's port name is already correct."""
+    if not comp.is_subcircuit() or comp.circuit_id not in subdefs:
+        return port.name
+    labels = _inner_labels(subdefs, comp.circuit_id, direction)
+    try:
+        return labels[int(port.name)]
+    except (ValueError, TypeError, IndexError):
+        return port.name
+
+
+def _port_index(components, var_of, subdefs):
+    """Map rounded absolute coordinate (x, y) -> list of (var, port_name, direction)."""
+    index: dict = {}
     for comp in components:
-        var = var_of.get(comp.get("id"))
+        var = var_of.get(comp.id)
         if var is None:
             continue
-        cx, cy = comp.get("x", 0), comp.get("y", 0)
-        is_sch = comp.get("type") == "schematic-component"
-        cid = (comp.get("props", {}) or {}).get("circuitId") if is_sch else None
-        tunnel_dir = tunnel_dirs.get(comp.get("id")) if comp.get("type") == "tunnel" else None
-        for port in comp.get("ports", []) or []:
-            direction = tunnel_dir if tunnel_dir is not None else port.get("direction")
-            name = port.get("name")
-            if is_sch and cid in subdefs:
-                labels = _inner_labels(subdefs, cid, direction)
-                try:
-                    name = labels[int(port.get("name"))]
-                except (ValueError, TypeError, IndexError):
-                    pass  # fall back to the raw name
-            key = (_r(cx + port.get("x", 0)), _r(cy + port.get("y", 0)))
-            index.setdefault(key, []).append((var, name, direction))
+        for port in comp.ports:
+            direction = comp.port_direction(port)
+            name = _external_port_name(comp, port, direction, subdefs)
+            index.setdefault(comp.port_position(port), []).append((var, name, direction))
     return index
 
 
@@ -349,104 +409,109 @@ def _group_nets(wires, junctions):
     return list(nets.values())
 
 
-def _infer_tunnel_directions(components, wires, junctions):
-    """Infer each tunnel's direction from what it's wired to, ignoring the stored prop.
-    Returns ``{js_id: "input"|"output"}`` for every *wired* tunnel.
+def _assign_tunnel_directions(components, wires, junctions):
+    """Infer each wired tunnel's direction from what it's wired to, ignoring the stored prop.
 
     A tunnel whose local net contains a real driver (a non-tunnel output port) is a
     publisher: it reads that driven value and pushes it onto the named net, so its own port
     is an input. Otherwise the tunnel is a subscriber — it sources the net's value onto a
-    local wire, so its port is an output. An unwired tunnel is in no net and is omitted.
+    local wire, so its port is an output. An unwired tunnel is in no net and stays None.
     """
     from collections import defaultdict
 
-    port_at = defaultdict(list)  # coord -> [(comp_id, direction, is_tunnel)]
+    comps_at = defaultdict(list)  # coord -> [(component, stored port direction)]
     for comp in components:
-        is_tunnel = comp.get("type") == "tunnel"
-        cx, cy = comp.get("x", 0), comp.get("y", 0)
-        for port in comp.get("ports", []) or []:
-            key = (_r(cx + port.get("x", 0)), _r(cy + port.get("y", 0)))
-            port_at[key].append((comp.get("id"), port.get("direction"), is_tunnel))
+        for port in comp.ports:
+            comps_at[comp.port_position(port)].append((comp, port.direction))
 
-    result = {}
     for net in _group_nets(wires, junctions):
         coords = {key for i in net for key in _endpoints(wires[i])}
-        has_driver = any(
-            direction == "output" and not is_tunnel
-            for key in coords
-            for (_cid, direction, is_tunnel) in port_at.get(key, [])
-        )
+        has_driver = False
         for key in coords:
-            for (cid, _direction, is_tunnel) in port_at.get(key, []):
-                if is_tunnel:
-                    result[cid] = "input" if has_driver else "output"
-    return result
+            for comp, direction in comps_at.get(key, []):
+                if direction == "output" and not comp.is_tunnel():
+                    has_driver = True
+        for key in coords:
+            for comp, _direction in comps_at.get(key, []):
+                if comp.is_tunnel():
+                    if has_driver:
+                        comp.tunnel_direction = "input"
+                    else:
+                        comp.tunnel_direction = "output"
 
 
-def _validate_tunnel_nets(components, tunnel_dirs):
+def _validate_tunnel_nets(components):
     """Raise a CircuitError for a tunnel net that cannot work: no driver (every same-label
     tunnel is a subscriber, so they would read nothing) or more than one driver (two
     publishers contend). Only labelled, wired tunnels form a net."""
     from collections import defaultdict
 
-    by_label = defaultdict(lambda: {"publishers": [], "subscribers": []})
+    publishers_of = defaultdict(list)
+    subscribers_of = defaultdict(list)
+    labels = []
     for comp in components:
-        if comp.get("type") != "tunnel":
+        if not comp.is_tunnel() or comp.tunnel_direction is None or not comp.label:
             continue
-        direction = tunnel_dirs.get(comp.get("id"))
-        if direction is None:
-            continue  # unwired tunnel: part of no net
-        label = (comp.get("props", {}) or {}).get("label", "")
-        if not label:
-            continue  # an unlabelled tunnel names no net (the engine ignores it)
-        bucket = "publishers" if direction == "input" else "subscribers"
-        by_label[label][bucket].append(comp)
+        if comp.label not in labels:
+            labels.append(comp.label)
+        if comp.tunnel_direction == "input":
+            publishers_of[comp.label].append(comp)
+        else:
+            subscribers_of[comp.label].append(comp)
 
-    for label, group in by_label.items():
-        publishers, subscribers = group["publishers"], group["subscribers"]
+    for label in labels:
+        publishers = publishers_of[label]
+        subscribers = subscribers_of[label]
         if len(publishers) >= 2:
-            bad = publishers[1]
             raise CircuitError(
-                component_id=bad.get("id"), component_type="tunnel",
+                component_id=publishers[1].id, component_type="tunnel",
                 component_label=label, error_code=ERROR_TUNNEL_MULTIPLE_DRIVERS, label=label)
         if not publishers and subscribers:
-            bad = subscribers[0]
             raise CircuitError(
-                component_id=bad.get("id"), component_type="tunnel",
+                component_id=subscribers[0].id, component_type="tunnel",
                 component_label=label, error_code=ERROR_TUNNEL_NO_DRIVER, label=label)
+
+
+def _driver_key(var, port, comp):
+    """Same-label subscriber tunnels on one net carry the same value, so they share a key
+    and count as one driver. Any other output port is its own driver."""
+    if comp.is_tunnel():
+        return ("tunnel", comp.label)
+    return (var, port)
+
+
+def _describe_driver(comp, port):
+    """A driver's name for an error message. A subcircuit's positional port is shown by its
+    inner label (as resolved in the index)."""
+    name = comp.label or comp.type
+    output_count = sum(1 for p in comp.ports if p.direction == "output")
+    if output_count > 1:
+        return f"{name}.{port}"
+    return name
 
 
 def _check_single_driver(outs, comp_of_var, circuit_name):
     """Raise a CircuitError if a net has more than one driver (output port). Two outputs
     wired together can't both set the wire's value, so the circuit can't be right — e.g. a
-    stray wire joining two of a subcircuit's output pins. Same-label subscriber tunnels on
-    one net carry the same value, so they count as one driver."""
-    drivers, seen = [], set()
+    stray wire joining two of a subcircuit's output pins."""
+    drivers = []
+    seen = set()
     for var, port in outs:
-        comp = comp_of_var.get(var, {})
-        props = comp.get("props", {}) or {}
-        key = (("tunnel", props.get("label", "")) if comp.get("type") == "tunnel"
-               else (var, port))
+        comp = comp_of_var[var]
+        key = _driver_key(var, port, comp)
         if key not in seen:
             seen.add(key)
             drivers.append((comp, port))
     if len(drivers) < 2:
         return
 
-    def describe(comp, port):
-        props = comp.get("props", {}) or {}
-        name = props.get("label") or comp.get("type", "?")
-        n_out = sum(1 for p in comp.get("ports", []) or [] if p.get("direction") == "output")
-        # A subcircuit's positional port is shown by its inner label (as resolved in the index).
-        return f"{name}.{port}" if n_out > 1 else name
-
-    (first, first_port), (second, _) = drivers[0], drivers[1]
+    first, first_port = drivers[0]
+    second = drivers[1][0]
     raise CircuitError(
-        component_id=first.get("id"), component_type=first.get("type"),
-        component_label=(first.get("props", {}) or {}).get("label", ""),
+        component_id=first.id, component_type=first.type, component_label=first.label,
         error_code=ERROR_NET_MULTIPLE_DRIVERS, port_name=first_port,
-        connected_component_id=second.get("id"), circuit_name=circuit_name,
-        count=len(drivers), drivers=", ".join(describe(c, p) for c, p in drivers))
+        connected_component_id=second.id, circuit_name=circuit_name,
+        count=len(drivers), drivers=", ".join(_describe_driver(c, p) for c, p in drivers))
 
 
 def _resolve_connections(wires, junctions, index, comp_of_var=None, circuit_name=None):
@@ -495,17 +560,19 @@ def _validate_interface_connected(components, var_of, conns, circuit_name):
     driven = {dvar for (_s, (dvar, _dn), _js) in conns}    # ports something drives (a dst)
     driving = {svar for ((svar, _sn), _d, _js) in conns}   # ports that drive (a src)
     for comp in components:
-        t = comp.get("type")
-        if t not in ("input", "output"):
+        if comp.type not in ("input", "output"):
             continue
-        var = var_of.get(comp.get("id"))
+        var = var_of.get(comp.id)
         if var is None:
             continue
-        connected = var in driving if t == "input" else var in driven
+        if comp.type == "input":
+            connected = var in driving
+        else:
+            connected = var in driven
         if not connected:
-            label = (comp.get("props", {}) or {}).get("label") or comp.get("id")
+            label = comp.label or comp.id
             raise CircuitError(
-                component_id=comp.get("id"), component_type=t, component_label=label,
+                component_id=comp.id, component_type=comp.type, component_label=label,
                 error_code="portNotFullyConnected", circuit_name=circuit_name,
                 port_name=label, label=label)
 
@@ -516,38 +583,34 @@ def _emit_body(components, wires, junctions, circ_var, subdefs, templates, lines
     subcircuit body) into ``circ_var``."""
     # A tunnel's direction is derived from its wiring (not the stored prop), and same-label
     # tunnels must form a valid net (exactly one driver). Resolve and check both up front.
-    tunnel_dirs = _infer_tunnel_directions(components, wires, junctions)
-    _validate_tunnel_nets(components, tunnel_dirs)
+    _assign_tunnel_directions(components, wires, junctions)
+    _validate_tunnel_nets(components)
 
     var_of = {}
     value_inits = []
     for comp in components:
-        t = comp.get("type")
-        if t == "schematic-component":
-            cid = (comp.get("props", {}) or {}).get("circuitId")
-            tvar = templates.get(cid)
+        if comp.is_subcircuit():
+            tvar = templates.get(comp.circuit_id)
             if tvar is None:
                 continue  # unknown/undefined subcircuit
-            var = _var(comp["id"])
-            var_of[comp["id"]] = var
+            var = _var(comp.id)
+            var_of[comp.id] = var
             lines.append(f"{var} = {tvar}()")
             continue
-        expr, init = _component_expr(
-            comp, tunnel_dir=tunnel_dirs.get(comp.get("id")) if t == "tunnel" else None
-        )
+        expr, init = _component_expr(comp.raw, tunnel_dir=comp.tunnel_direction)
         if expr is None:
             continue
-        var = _var(comp["id"])
-        var_of[comp["id"]] = var
+        var = _var(comp.id)
+        var_of[comp.id] = var
         lines.append(f"{var} = {expr}")
         # A subcircuit's own Input nodes are interface ports driven by the parent, so
         # only set a value for top-level inputs; constants always carry their value.
-        if init is not None and (t != "input" or is_top):
+        if init is not None and (comp.type != "input" or is_top):
             value_inits.append(f"{var}.value = {init}")
     lines.extend(value_inits)
 
-    index = _port_index(components, var_of, subdefs, tunnel_dirs)
-    comp_of_var = {var_of[c["id"]]: c for c in components if c.get("id") in var_of}
+    index = _port_index(components, var_of, subdefs)
+    comp_of_var = {var_of[c.id]: c for c in components if c.id in var_of}
     conns = _resolve_connections(wires, junctions, index, comp_of_var, circuit_name)
     if not is_top:
         _validate_interface_connected(components, var_of, conns, circuit_name)
@@ -601,22 +664,23 @@ def generate(ggc, mode="run"):
         if circuit_id in in_progress:
             cycle = in_progress[in_progress.index(circuit_id):] + [circuit_id]
             raise CircuitError(
-                component_id=placement.get("id"), component_type="schematic-component",
+                component_id=placement.id, component_type="schematic-component",
                 component_label=_name_of(circuit_id), error_code="recursiveSubcircuit",
                 circuit_name=_name_of(in_progress[-1]),
                 chain=" → ".join(_name_of(c) for c in cycle))
         in_progress.append(circuit_id)
         inner = subdefs[circuit_id].get("circuit", {}) or {}
-        for child in inner.get("components", []) or []:
-            if child.get("type") == "schematic-component":
-                ensure_template((child.get("props", {}) or {}).get("circuitId"), child)
+        inner_components = _parse_components(inner.get("components"))
+        for child in inner_components:
+            if child.is_subcircuit():
+                ensure_template(child.circuit_id, child)
         in_progress.pop()
         cvar = f"sub_{_san(circuit_id)}"
         name = _name_of(circuit_id)
         lines.append("")
         lines.append(f"# subcircuit: {name}")
         lines.append(f'{cvar} = circuit.Circuit(circuit_name="{_esc(name)}")')
-        _emit_body(inner.get("components", []) or [], inner.get("wires", []) or [],
+        _emit_body(inner_components, inner.get("wires", []) or [],
                    inner.get("wireJunctions", []) or [],
                    cvar, subdefs, templates, lines, is_top=False, circuit_name=name)
         tvar = f"Tmpl_{_san(circuit_id)}"
@@ -624,9 +688,10 @@ def generate(ggc, mode="run"):
         templates[circuit_id] = tvar
         return tvar
 
-    for comp in ggc.get("components", []) or []:
-        if comp.get("type") == "schematic-component":
-            ensure_template((comp.get("props", {}) or {}).get("circuitId"), comp)
+    top_components = _parse_components(ggc.get("components"))
+    for comp in top_components:
+        if comp.is_subcircuit():
+            ensure_template(comp.circuit_id, comp)
 
     lines.append("")
     top_name = ggc.get("name")
@@ -635,7 +700,7 @@ def generate(ggc, mode="run"):
         if top_name
         else "circuit0 = circuit.Circuit()"
     )
-    _emit_body(ggc.get("components", []) or [], ggc.get("wires", []) or [],
+    _emit_body(top_components, ggc.get("wires", []) or [],
                ggc.get("wireJunctions", []) or [],
                "circuit0", subdefs, templates, lines, is_top=True,
                circuit_name=ggc.get("name"))
@@ -647,9 +712,9 @@ def generate(ggc, mode="run"):
         # is the browser path: await the cooperative variant so a long clocked Test yields to
         # the event loop (responsive UI, live updates, working Stop) instead of freezing it.
         call = "await {v}.evaluate_async(circuit0)" if mode == "test_async" else "{v}.evaluate(circuit0)"
-        for comp in ggc.get("components", []) or []:
-            if comp.get("type") == "test":
-                lines.append(call.format(v=_var(comp["id"])))
+        for comp in top_components:
+            if comp.type == "test":
+                lines.append(call.format(v=_var(comp.id)))
     elif mode == "run_async":
         lines.append("await circuit0.run_async()")
     else:
