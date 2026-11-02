@@ -910,3 +910,8 @@ def test_chips_rom_program_larger_than_address_space_raises():
     assert ei.value.error_code == ERROR_CHIPSROM_OVERFLOW
     assert ei.value.additional_fields["words"] == 9
     assert ei.value.additional_fields["capacity"] == 8
+
+
+def test_null_bits_means_one_bit():
+    expr, _ = view._component_expr({"id": "i", "type": "input", "props": {"label": "a", "bits": None}})
+    assert "bits=1" in expr

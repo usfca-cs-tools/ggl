@@ -80,6 +80,10 @@ def _component_expr(comp, tunnel_dir=None):
     p = comp.get("props", {}) or {}
     label = p.get("label", "")
     bits = p.get("bits", 1)
+    # A key present with a null value gets past get()'s default. The inspector and frontend
+    # show this as 1 bit, and bits=None would crash the first propagate().
+    if bits is None:
+        bits = 1
     js_id = comp.get("id", "")
 
     if t == "input":
