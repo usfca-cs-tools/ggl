@@ -934,3 +934,9 @@ def test_a_cleared_number_field_means_its_default():
 def test_null_in_a_structural_field_fails_instead_of_being_hidden():
     with pytest.raises(TypeError):
         view.parse_component({"id": "a", "type": "and-gate", "ports": None})
+
+
+def test_a_cleared_bits_field_means_one_bit():
+    component = view.parse_component({"id": "i", "type": "input", "props": {"label": "a", "bits": None}})
+    assert component.bits == 1
+    assert "bits=1" in component.expression()

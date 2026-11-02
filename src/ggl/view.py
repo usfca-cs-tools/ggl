@@ -136,7 +136,7 @@ class GgcComponent(abc.ABC):
         self.y = data.get("y", 0)
         self.ports = [GgcPort(port) for port in data.get("ports", [])]
         self.label = props.get("label", "")
-        self.bits = props.get("bits", 1)
+        self.bits = _int_or_default(props.get("bits"), 1)
         self._props = props
 
     def prop(self, name, default=None):
