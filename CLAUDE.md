@@ -17,10 +17,13 @@ follow. In priority order:
    use `abc.abstractmethod`, the analog of pure virtual.
 5. **Parse at the boundary.** Raw JSON dicts are converted to typed classes once. Nothing past
    that point sees a dict.
-6. **Plain control flow.** Use `if/else` statements, one assignment per line and descriptive
+6. **Trust initialized members.** Use `or` for a value only to normalize a `None` constructor
+   argument, or to choose between two meaningful values. Defaults for missing data are applied
+   once, in the constructor that parses it. Past that point, trust the member.
+7. **Plain control flow.** Use `if/else` statements, one assignment per line and descriptive
    names. Allow a ternary only for a trivial choice between two simple values on one short line.
-7. **Small units.** Aim for functions under about 25 lines and at most 3 levels of nesting.
-8. **Comments** explain what a concept is or why a choice was made. Don't narrate the next line.
+8. **Small units.** Aim for functions under about 25 lines and at most 3 levels of nesting.
+9. **Comments** explain what a concept is or why a choice was made. Don't narrate the next line.
 
 Don't copy repetition from older code, such as the identical gate constructors in `logic.py` or
 mutable default arguments.
