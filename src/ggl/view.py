@@ -47,10 +47,12 @@ def _str_list(names):
     return "[" + ", ".join(f'"{_esc(n)}"' for n in names) + "]"
 
 
-def _row_list(rows):
-    return "[" + ", ".join(
-        "[" + ", ".join(str(int(v or 0)) for v in (row or [])) + "]" for row in rows
-    ) + "]"
+def _int_or_default(value, default):
+    """Parse a number field. The inspector stores a field the user cleared as null, which
+    means the field's default."""
+    if value is None or value == "":
+        return default
+    return int(value)
 
 
 def _r(v):
@@ -110,14 +112,15 @@ class GgcJunction:
     """A T-tap, where a branch wire meets a trunk wire mid-run"""
 
     def __init__(self, data: dict):
-        self.position = _position(data.get("pos") or {})
+        self.position = _position(data.get("pos", {}))
         self.connected_wire_id = data.get("connectedWireId")
 
 
 class GgcComponent(abc.ABC):
     """
     One component from a .ggc file. The JSON is parsed here, once, so the rest of this
-    module works with declared members. A component also knows the GGL expression which
+    module works with declared members, and a subclass parses the properties specific to
+    its type in its own constructor. A component also knows the GGL expression which
     constructs its Node. The way a Gate subclass supplies only logic(), a subclass here
     supplies only its GGL class and the arguments which differ. Every Node takes a label
     first and a js_id last.
@@ -127,11 +130,11 @@ class GgcComponent(abc.ABC):
     ggl_class = ""
 
     def __init__(self, data: dict):
-        props = data.get("props", {}) or {}
+        props = data.get("props", {})
         self.id = data.get("id", "")
         self.x = data.get("x", 0)
         self.y = data.get("y", 0)
-        self.ports = [GgcPort(port) for port in data.get("ports", []) or []]
+        self.ports = [GgcPort(port) for port in data.get("ports", [])]
         self.label = props.get("label", "")
         self.bits = props.get("bits", 1)
         self._props = props
@@ -241,8 +244,9 @@ class GgcBits(GgcComponent):
 class GgcSource(GgcBits):
     """A component which holds a value and pushes it downstream"""
 
-    def stored_value(self):
-        return int(self.prop("value", 0) or 0)
+    def __init__(self, data: dict):
+        super().__init__(data)
+        self.stored_value = _int_or_default(self.prop("value"), 0)
 
 
 class GgcInput(GgcSource):
@@ -252,7 +256,7 @@ class GgcInput(GgcSource):
     def initial_value(self, is_top):
         # A subcircuit's own Inputs are interface ports driven by the parent
         if is_top:
-            return self.stored_value()
+            return self.stored_value
         return None
 
     def is_interface_port(self, direction):
@@ -268,7 +272,7 @@ class GgcConstant(GgcSource):
     ggl_class = "io.Constant"
 
     def initial_value(self, is_top):
-        return self.stored_value()
+        return self.stored_value
 
 
 class GgcOutput(GgcBits):
@@ -293,25 +297,31 @@ class GgcClock(GgcComponent):
     ggc_type = "clock"
     ggl_class = "io.Clock"
 
+    def __init__(self, data: dict):
+        super().__init__(data)
+        self.frequency = self.prop("frequency", 1)
+        self.mode = self.prop("mode", "auto")
+
     def arguments(self):
-        frequency = self.prop("frequency", 1)
-        mode = _esc(self.prop("mode", "auto"))
-        return [f"frequency={frequency}", f'mode="{mode}"']
+        return [f"frequency={self.frequency}", f'mode="{_esc(self.mode)}"']
 
 
 class GgcGate(GgcComponent):
     """Every gate omits the arguments which are at their engine defaults"""
 
+    def __init__(self, data: dict):
+        super().__init__(data)
+        self.num_inputs = self.prop("numInputs")
+        self.inverted_inputs = self.prop("invertedInputs", [])
+
     def arguments(self):
         args = []
         if self.bits != 1:
             args.append(f"bits={self.bits}")
-        num_inputs = self.prop("numInputs")
-        if num_inputs is not None:
-            args.append(f"num_inputs={int(num_inputs)}")
-        inverted_inputs = self.prop("invertedInputs")
-        if inverted_inputs:
-            args.append(f"inverted_inputs={list(inverted_inputs)}")
+        if self.num_inputs is not None:
+            args.append(f"num_inputs={int(self.num_inputs)}")
+        if self.inverted_inputs:
+            args.append(f"inverted_inputs={list(self.inverted_inputs)}")
         return args
 
 
@@ -353,27 +363,35 @@ class GgcXnor(GgcGate):
 class GgcRanges(GgcComponent):
     """A component which splits or merges a bus into (start, end) bit ranges"""
 
-    def ranges(self):
-        ranges = []
-        for bit_range in self.prop("ranges") or []:
-            ranges.append((bit_range.get("start"), bit_range.get("end")))
-        return ranges
+    def __init__(self, data: dict):
+        super().__init__(data)
+        self.ranges = []
+        for bit_range in self.prop("ranges", []):
+            self.ranges.append((bit_range.get("start"), bit_range.get("end")))
 
 
 class GgcSplitter(GgcRanges):
     ggc_type = "splitter"
     ggl_class = "wires.Splitter"
 
+    def __init__(self, data: dict):
+        super().__init__(data)
+        self.input_bits = self.prop("inputBits", 1)
+
     def arguments(self):
-        return [f'bits={self.prop("inputBits", 1)}', f"splits={self.ranges()}"]
+        return [f"bits={self.input_bits}", f"splits={self.ranges}"]
 
 
 class GgcMerger(GgcRanges):
     ggc_type = "merger"
     ggl_class = "wires.Merger"
 
+    def __init__(self, data: dict):
+        super().__init__(data)
+        self.output_bits = self.prop("outputBits", 1)
+
     def arguments(self):
-        return [f'bits={self.prop("outputBits", 1)}', f"merge_inputs={self.ranges()}"]
+        return [f"bits={self.output_bits}", f"merge_inputs={self.ranges}"]
 
 
 class GgcTunnel(GgcComponent):
@@ -385,6 +403,7 @@ class GgcTunnel(GgcComponent):
         super().__init__(data)
         # Comes from the tunnel's wiring, not its stored property. None until it's wired.
         self.tunnel_direction: str | None = None
+        self.stored_direction = self.prop("direction", "input")
 
     def port_direction(self, port):
         if self.tunnel_direction is not None:
@@ -417,7 +436,7 @@ class GgcTunnel(GgcComponent):
     def arguments(self):
         direction = self.tunnel_direction
         if direction is None:
-            direction = self.prop("direction", "input")
+            direction = self.stored_direction
         return [f'direction="{_esc(direction)}"']
 
 
@@ -452,15 +471,18 @@ class GgcShift(GgcComponent):
     ggc_type = "shift"
     ggl_class = "arithmetic.BarrelShifter"
 
-    def arguments(self):
+    def __init__(self, data: dict):
+        super().__init__(data)
         packed_mode = str(self.prop("mode", "logical_left"))
-        direction = "left"
+        self.direction = "left"
         if "right" in packed_mode:
-            direction = "right"
-        mode = "logical"
+            self.direction = "right"
+        self.mode = "logical"
         if "arithmetic" in packed_mode:
-            mode = "arithmetic"
-        return [f"bits={self.bits}", f'direction="{direction}"', f'mode="{mode}"']
+            self.mode = "arithmetic"
+
+    def arguments(self):
+        return [f"bits={self.bits}", f'direction="{self.direction}"', f'mode="{self.mode}"']
 
 
 class GgcSignExtend(GgcComponent):
@@ -468,17 +490,24 @@ class GgcSignExtend(GgcComponent):
     ggc_type = "signExtend"
     ggl_class = "arithmetic.SignExtend"
 
+    def __init__(self, data: dict):
+        super().__init__(data)
+        self.in_bits = int(self.prop("inBits", 1))
+        self.out_bits = int(self.prop("outBits", 1))
+
     def arguments(self):
-        in_bits = int(self.prop("inBits", 1))
-        out_bits = int(self.prop("outBits", 1))
-        return [f"in_bits={in_bits}", f"out_bits={out_bits}"]
+        return [f"in_bits={self.in_bits}", f"out_bits={self.out_bits}"]
 
 
 class GgcSelector(GgcComponent):
     """A plexer sized by its number of selector bits"""
 
+    def __init__(self, data: dict):
+        super().__init__(data)
+        self.selector_bits = int(self.prop("selectorBits", 2))
+
     def arguments(self):
-        return [f'selector_bits={int(self.prop("selectorBits", 2))}']
+        return [f"selector_bits={self.selector_bits}"]
 
 
 class GgcMultiplexer(GgcSelector):
@@ -512,29 +541,29 @@ class GgcChipsRom(GgcComponent):
     ggc_type = "chipsROM"
     ggl_class = "memory.ROM"
 
-    def check_program(self, words, capacity):
-        if not words:
+    def __init__(self, data: dict):
+        super().__init__(data)
+        self.address_bits = int(self.prop("addressBits", 6))
+        self.words = self.prop("words", [])
+
+    def check_program(self, capacity):
+        if not self.words:
             raise CircuitError(
                 component_id=self.id, component_type=self.ggc_type, component_label=self.label,
                 error_code=ERROR_CHIPSROM_NO_PROGRAM, label=self.label)
-        if len(words) > capacity:
+        if len(self.words) > capacity:
             raise CircuitError(
                 component_id=self.id, component_type=self.ggc_type, component_label=self.label,
-                error_code=ERROR_CHIPSROM_OVERFLOW, label=self.label, words=len(words),
-                addressBits=self.address_bits(), capacity=capacity)
-
-    def address_bits(self):
-        return int(self.prop("addressBits", 6))
+                error_code=ERROR_CHIPSROM_OVERFLOW, label=self.label, words=len(self.words),
+                addressBits=self.address_bits, capacity=capacity)
 
     def arguments(self):
-        address_bits = self.address_bits()
-        capacity = 1 << address_bits
-        words = self.prop("words") or []
-        self.check_program(words, capacity)
+        capacity = 1 << self.address_bits
+        self.check_program(capacity)
         data = [0] * capacity
-        for i, word in enumerate(words):
+        for i, word in enumerate(self.words):
             data[i] = int(word)
-        return [f"address_bits={address_bits}", "data_bits=32", f"data={data}"]
+        return [f"address_bits={self.address_bits}", "data_bits=32", f"data={data}"]
 
 
 class GgcRom(GgcComponent):
@@ -542,26 +571,32 @@ class GgcRom(GgcComponent):
     ggc_type = "rom"
     ggl_class = "memory.ROM"
 
+    def __init__(self, data: dict):
+        super().__init__(data)
+        self.address_bits = int(self.prop("addressBits", 4))
+        self.data_bits = int(self.prop("dataBits", 8))
+        self.stored_data = self.prop("data", [])
+
     def arguments(self):
-        address_bits = int(self.prop("addressBits", 4))
-        data_bits = int(self.prop("dataBits", 8))
-        capacity = 1 << address_bits
-        max_value = (1 << data_bits) - 1
-        stored = self.prop("data") or []
+        capacity = 1 << self.address_bits
+        max_value = (1 << self.data_bits) - 1
         data = [0] * capacity
-        for i, value in enumerate(stored[:capacity]):
+        for i, value in enumerate(self.stored_data[:capacity]):
             data[i] = max(0, min(int(value), max_value))
-        return [f"address_bits={address_bits}", f"data_bits={data_bits}", f"data={data}"]
+        return [f"address_bits={self.address_bits}", f"data_bits={self.data_bits}", f"data={data}"]
 
 
 class GgcRam(GgcComponent):
     ggc_type = "ram"
     ggl_class = "memory.RAM"
 
+    def __init__(self, data: dict):
+        super().__init__(data)
+        self.address_bits = int(self.prop("addressBits", 4))
+        self.data_bits = int(self.prop("dataBits", 8))
+
     def arguments(self):
-        address_bits = int(self.prop("addressBits", 4))
-        data_bits = int(self.prop("dataBits", 8))
-        return [f"address_bits={address_bits}", f"data_bits={data_bits}"]
+        return [f"address_bits={self.address_bits}", f"data_bits={self.data_bits}"]
 
 
 class GgcTest(GgcComponent):
@@ -569,32 +604,44 @@ class GgcTest(GgcComponent):
     ggc_type = "test"
     ggl_class = "io.Test"
 
+    def __init__(self, data: dict):
+        super().__init__(data)
+        table = self.prop("table", {})
+        self.input_names = table.get("inputNames", [])
+        self.output_names = table.get("outputNames", [])
+        self.rows = [[int(cell) for cell in row] for row in table.get("rows", [])]
+        self.stop_enabled = self.prop("stop_enabled")
+        self.stop_output_name = self.prop("stop_output_name", "")
+        self.stop_output_value = _int_or_default(self.prop("stop_output_value"), 0)
+        # Cap on how long a stuck clocked test waits before failing. Matches the default in
+        # io.Test, so an unreached stop condition surfaces quickly.
+        self.max_cycles = _int_or_default(self.prop("max_cycles"), 1000)
+        self.reset_enabled = self.prop("reset_enabled")
+        self.reset_input_name = self.prop("reset_input_name", "")
+
     def table_arguments(self):
-        table = self.prop("table") or {}
         return [
-            f'input_names={_str_list(table.get("inputNames") or [])}',
-            f'output_names={_str_list(table.get("outputNames") or [])}',
-            f'rows={_row_list(table.get("rows") or [])}',
+            f"input_names={_str_list(self.input_names)}",
+            f"output_names={_str_list(self.output_names)}",
+            f"rows={self.rows}",
         ]
 
     def stop_arguments(self):
-        if not self.prop("stop_enabled"):
+        if not self.stop_enabled:
             return []
         return [
             "stop_enabled=True",
-            f'stop_output_name="{_esc(self.prop("stop_output_name", ""))}"',
-            f'stop_output_value={int(self.prop("stop_output_value") or 0)}',
-            # Cap on how long a stuck clocked test waits before failing. Default 1000
-            # (matches io.Test) so an unreached stop condition surfaces quickly.
-            f'max_cycles={int(self.prop("max_cycles") or 1000)}',
+            f'stop_output_name="{_esc(self.stop_output_name)}"',
+            f"stop_output_value={self.stop_output_value}",
+            f"max_cycles={self.max_cycles}",
         ]
 
     def reset_arguments(self):
-        if not self.prop("reset_enabled"):
+        if not self.reset_enabled:
             return []
         return [
             "reset_enabled=True",
-            f'reset_input_name="{_esc(self.prop("reset_input_name", ""))}"',
+            f'reset_input_name="{_esc(self.reset_input_name)}"',
         ]
 
     def arguments(self):
@@ -659,7 +706,7 @@ def parse_component(data):
 
 
 def _parse_components(raw_components):
-    return [parse_component(data) for data in raw_components or []]
+    return [parse_component(data) for data in raw_components]
 
 
 class NetPort:
@@ -677,7 +724,7 @@ class PortIndex:
     """Finds the ports at a coordinate, which is how wires are matched to components"""
 
     def __init__(self):
-        self.ports_at_position = {}
+        self.ports_at_position: dict = {}
 
     def add(self, position, port):
         self.ports_at_position.setdefault(position, []).append(port)
@@ -712,9 +759,9 @@ class Net:
 
     def __init__(self, wires):
         self.wires = wires
-        self.drivers = {}         # identity -> NetPort
-        self.sinks = {}           # identity -> NetPort
-        self.sink_wire_ids = {}   # identity -> id of the first wire reaching the sink
+        self.drivers: dict = {}         # identity -> NetPort
+        self.sinks: dict = {}           # identity -> NetPort
+        self.sink_wire_ids: dict = {}   # identity -> id of the first wire reaching the sink
 
     def coordinates(self):
         coordinates = set()
@@ -738,7 +785,7 @@ class Net:
     def check_single_driver(self, circuit_name):
         """Two outputs wired together can't both set the wire's value, so the circuit can't
         be right. For example, a stray wire joining two of a subcircuit's output pins."""
-        distinct = {}
+        distinct: dict = {}
         for port in self.drivers.values():
             distinct.setdefault(port.comp.driver_key(port), port)
         if len(distinct) < 2:
@@ -783,7 +830,7 @@ class NetBuilder:
         self.parent[self.find(a)] = self.find(b)
 
     def join_shared_endpoints(self):
-        wires_at = {}
+        wires_at: dict = {}
         for i, wire in enumerate(self.wires):
             for position in wire.endpoints:
                 wires_at.setdefault(position, []).append(i)
@@ -808,7 +855,7 @@ class NetBuilder:
     def build(self):
         self.join_shared_endpoints()
         self.join_junctions()
-        groups = {}
+        groups: dict = {}
         for i, wire in enumerate(self.wires):
             groups.setdefault(self.find(i), []).append(wire)
         return [Net(wires) for wires in groups.values()]
@@ -848,7 +895,7 @@ class TunnelNets:
         self.nets = nets
 
     def assign_directions(self):
-        ports_at = {}  # position -> [(component, stored port direction)]
+        ports_at: dict = {}  # position -> [(component, stored port direction)]
         for comp in self.components:
             for port in comp.ports:
                 ports_at.setdefault(comp.port_position(port), []).append((comp, port.direction))
@@ -862,7 +909,7 @@ class TunnelNets:
                 comp.wired_to_net(has_driver)
 
     def check(self):
-        tunnel_nets = {}
+        tunnel_nets: dict = {}
         for comp in self.components:
             comp.join_tunnel_net(tunnel_nets)
         for tunnel_net in tunnel_nets.values():
@@ -874,9 +921,9 @@ class GgcCircuit:
 
     def __init__(self, name, data: dict):
         self.name = name
-        self.components = _parse_components(data.get("components"))
-        self.wires = [GgcWire(wire) for wire in data.get("wires", []) or []]
-        self.junctions = [GgcJunction(junction) for junction in data.get("wireJunctions", []) or []]
+        self.components = _parse_components(data.get("components", []))
+        self.wires = [GgcWire(wire) for wire in data.get("wires", [])]
+        self.junctions = [GgcJunction(junction) for junction in data.get("wireJunctions", [])]
 
     def interface_labels(self, direction):
         """The ordered labels of this circuit's Inputs or Outputs, which are the port names
@@ -957,13 +1004,13 @@ class ProgramGenerator:
     def __init__(self, ggc, mode):
         self.mode = mode
         self.top = GgcCircuit(ggc.get("name"), ggc)
-        self.subcircuit_data = ggc.get("schematicComponents", {}) or {}
-        self.definitions = {}  # circuitId -> GgcCircuit, parsed when first used
-        self.templates = {}    # circuitId -> template variable name
+        self.subcircuit_data = ggc.get("schematicComponents", {})
+        self.definitions: dict = {}  # circuitId -> GgcCircuit, parsed when first used
+        self.templates: dict = {}    # circuitId -> template variable name
         # circuitIds whose templates are being emitted, outermost first. A .ggc names
         # subcircuits by reference, so a circuit can place itself, directly or through others.
         # The GGL API can't express that, so it's caught here rather than recursing forever.
-        self.in_progress = []
+        self.in_progress: list = []
         self.lines = ["from ggl import arithmetic, circuit, component, io, logic, memory, plexers, wires"]
 
     def has_definition(self, circuit_id):
@@ -974,7 +1021,7 @@ class ProgramGenerator:
 
     def definition(self, circuit_id):
         if circuit_id not in self.definitions:
-            data = self.subcircuit_data[circuit_id].get("circuit", {}) or {}
+            data = self.subcircuit_data[circuit_id].get("circuit", {})
             self.definitions[circuit_id] = GgcCircuit(self.name_of(circuit_id), data)
         return self.definitions[circuit_id]
 

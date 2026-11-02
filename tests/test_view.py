@@ -916,3 +916,21 @@ def test_chips_rom_program_larger_than_address_space_raises():
     assert ei.value.error_code == ERROR_CHIPSROM_OVERFLOW
     assert ei.value.additional_fields["words"] == 9
     assert ei.value.additional_fields["capacity"] == 8
+
+
+def _test_component(**props):
+    return view.parse_component({"id": "t", "type": "test", "props": {
+        "label": "t", "stop_enabled": True, **props}})
+
+
+def test_a_cleared_number_field_means_its_default():
+    # The inspector stores a number field the user cleared as null
+    component = _test_component(max_cycles=None, stop_output_value=None)
+    assert component.max_cycles == 1000
+    assert component.stop_output_value == 0
+    assert view.parse_component({"id": "i", "type": "input", "props": {"value": None}}).stored_value == 0
+
+
+def test_null_in_a_structural_field_fails_instead_of_being_hidden():
+    with pytest.raises(TypeError):
+        view.parse_component({"id": "a", "type": "and-gate", "ports": None})
