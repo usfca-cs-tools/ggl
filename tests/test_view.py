@@ -396,11 +396,13 @@ def test_junction_trunk_resolved_by_geometry_not_stale_index():
     # at wB (index 2), a wire in the other net. Geometry (pos on wA) must win.
     junctions = [{"pos": {"x": 5, "y": 0}, "connectedWireId": "wAb", "sourceWireIndex": 2}]
     net_of = {}
-    for k, net in enumerate(view._group_nets(wires, junctions)):
-        for i in net:
-            net_of[i] = k
-    assert net_of[0] == net_of[1]  # branch joins its real trunk (A), via geometry
-    assert net_of[2] != net_of[0]  # net B stays independent despite the stale index
+    parsed_wires = [view.GgcWire(wire) for wire in wires]
+    parsed_junctions = [view.GgcJunction(junction) for junction in junctions]
+    for k, net in enumerate(view.NetBuilder(parsed_wires, parsed_junctions).build()):
+        for wire in net.wires:
+            net_of[wire.id] = k
+    assert net_of["wA"] == net_of["wAb"]  # branch joins its real trunk (A), via geometry
+    assert net_of["wB"] != net_of["wA"]  # net B stays independent despite the stale index
 
 
 def test_counter_no_subcircuits_counts_when_clocked():

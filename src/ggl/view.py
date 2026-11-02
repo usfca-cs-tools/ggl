@@ -71,6 +71,52 @@ class GgcPort:
         self.direction = data.get("direction")
 
 
+def _position(pos):
+    return (_r(pos.get("x")), _r(pos.get("y")))
+
+
+def _on_segment(point, start, end):
+    """True when point is collinear with the segment and within its bounding box"""
+    px, py = point
+    ax, ay = start
+    bx, by = end
+    if abs((bx - ax) * (py - ay) - (by - ay) * (px - ax)) >= 1e-6:
+        return False
+    in_x_range = min(ax, bx) - 1e-6 <= px <= max(ax, bx) + 1e-6
+    in_y_range = min(ay, by) - 1e-6 <= py <= max(ay, by) + 1e-6
+    return in_x_range and in_y_range
+
+
+class GgcWire:
+    """A wire from a .ggc file: a routed polyline between two endpoints"""
+
+    def __init__(self, data: dict):
+        self.id = data.get("id", "")
+        start = _position(data.get("startConnection", {}).get("pos", {}))
+        end = _position(data.get("endConnection", {}).get("pos", {}))
+        self.endpoints = (start, end)
+        points = data.get("points")
+        if points:
+            self.path = [_position(point) for point in points]
+        else:
+            self.path = [start, end]
+
+    def covers(self, point):
+        """True when point lies on the wire, at a vertex or anywhere along a segment"""
+        for start, end in zip(self.path, self.path[1:]):
+            if _on_segment(point, start, end):
+                return True
+        return False
+
+
+class GgcJunction:
+    """A T-tap, where a branch wire meets a trunk wire mid-run"""
+
+    def __init__(self, data: dict):
+        self.position = _position(data.get("pos") or {})
+        self.connected_wire_id = data.get("connectedWireId")
+
+
 class GgcComponent(abc.ABC):
     """
     One component from a .ggc file. The JSON is parsed here, once, so the rest of this
@@ -93,16 +139,10 @@ class GgcComponent(abc.ABC):
         self.label = props.get("label", "")
         self.bits = props.get("bits", 1)
         self.circuit_id = props.get("circuitId")
-        # A tunnel's direction comes from its wiring, not its stored property. It is set by
-        # _assign_tunnel_directions(), and stays None for every other kind of component.
-        self.tunnel_direction: str | None = None
         self._props = props
 
     def prop(self, name, default=None):
         return self._props.get(name, default)
-
-    def is_tunnel(self):
-        return self.type == "tunnel"
 
     def is_subcircuit(self):
         return self.type == "schematic-component"
@@ -116,9 +156,29 @@ class GgcComponent(abc.ABC):
         return (_r(self.x + port.x), _r(self.y + port.y))
 
     def port_direction(self, port):
-        if self.tunnel_direction is not None:
-            return self.tunnel_direction
         return port.direction
+
+    def drives_net(self, stored_direction):
+        """True if a port with this stored direction is a real driver on its net"""
+        return stored_direction == "output"
+
+    def driver_key(self, port):
+        """Identifies this driver when counting the drivers on a net"""
+        return port.identity
+
+    def wired_to_net(self, net_has_driver):
+        """Called when this component's port is on a net. Only a tunnel cares."""
+
+    def join_tunnel_net(self, tunnel_nets):
+        """Only a tunnel joins a named net"""
+
+    def describe_driver(self, port_name):
+        """This driver's name for an error message"""
+        name = self.label or self.type
+        output_count = sum(1 for port in self.ports if port.direction == "output")
+        if output_count > 1:
+            return f"{name}.{port_name}"
+        return name
 
     @abc.abstractmethod
     def arguments(self):
@@ -276,6 +336,39 @@ class GgcTunnel(GgcComponent):
     """Same-label tunnels are joined inside the engine"""
     ggc_type = "tunnel"
     ggl_class = "wires.Tunnel"
+
+    def __init__(self, data: dict):
+        super().__init__(data)
+        # Comes from the tunnel's wiring, not its stored property. None until it's wired.
+        self.tunnel_direction: str | None = None
+
+    def port_direction(self, port):
+        if self.tunnel_direction is not None:
+            return self.tunnel_direction
+        return port.direction
+
+    def drives_net(self, stored_direction):
+        return False
+
+    def driver_key(self, port):
+        # Same-label subscribers on one net carry the same value, so they count as one driver
+        return ("tunnel", self.label)
+
+    def wired_to_net(self, net_has_driver):
+        """A tunnel on a net with a real driver is a publisher: it reads that value and pushes
+        it onto the named net, so its own port is an input. Otherwise it's a subscriber: it
+        sources the named net's value onto a local wire, so its port is an output."""
+        if net_has_driver:
+            self.tunnel_direction = "input"
+        else:
+            self.tunnel_direction = "output"
+
+    def join_tunnel_net(self, tunnel_nets):
+        # An unwired or unlabelled tunnel names no net
+        if self.tunnel_direction is None or not self.label:
+            return
+        tunnel_net = tunnel_nets.setdefault(self.label, TunnelNet(self.label))
+        tunnel_net.add(self)
 
     def arguments(self):
         direction = self.tunnel_direction
@@ -488,7 +581,8 @@ def _component_expr(data, tunnel_dir=None):
     """Return (construction_expr, value_init) for one component's JSON, or (None, None) if
     its type isn't a runnable node. Used by tests."""
     comp = parse_component(data)
-    comp.tunnel_direction = tunnel_dir
+    if tunnel_dir is not None:
+        comp.wired_to_net(tunnel_dir == "input")
     if not comp.is_runnable():
         return (None, None)
     return (comp.expression(), comp.initial_value(is_top=True))
@@ -522,9 +616,32 @@ def _external_port_name(comp, port, direction, subdefs):
         return port.name
 
 
+class NetPort:
+    """A component's port as a net sees it. Identity is (variable, port name)."""
+
+    def __init__(self, comp, variable, name, direction):
+        self.comp = comp
+        self.variable = variable
+        self.name = name
+        self.direction = direction
+        self.identity = (variable, name)
+
+
+class PortIndex:
+    """Finds the ports at a coordinate, which is how wires are matched to components"""
+
+    def __init__(self):
+        self.ports_at_position = {}
+
+    def add(self, position, port):
+        self.ports_at_position.setdefault(position, []).append(port)
+
+    def ports_at(self, position):
+        return self.ports_at_position.get(position, [])
+
+
 def _port_index(components, var_of, subdefs):
-    """Map rounded absolute coordinate (x, y) -> list of (var, port_name, direction)."""
-    index: dict = {}
+    index = PortIndex()
     for comp in components:
         var = var_of.get(comp.id)
         if var is None:
@@ -532,240 +649,202 @@ def _port_index(components, var_of, subdefs):
         for port in comp.ports:
             direction = comp.port_direction(port)
             name = _external_port_name(comp, port, direction, subdefs)
-            index.setdefault(comp.port_position(port), []).append((var, name, direction))
+            index.add(comp.port_position(port), NetPort(comp, var, name, direction))
     return index
 
 
-def _match(index, pos, direction):
-    hits = [
-        (var, name)
-        for (var, name, d) in index.get((_r(pos.get("x")), _r(pos.get("y"))), [])
-        if d == direction
-    ]
-    return hits[0] if len(hits) == 1 else None
+class Connection:
+    """One connect() call: a driver, a port it drives, and the wire which carries it"""
+
+    def __init__(self, source, dest, wire_id):
+        self.source = source
+        self.dest = dest
+        self.wire_id = wire_id
+
+    def sort_key(self):
+        return (self.source.identity, self.dest.identity)
+
+    def statement(self, circuit_variable):
+        source = f'{self.source.variable}.output("{self.source.name}")'
+        dest = f'{self.dest.variable}.input("{self.dest.name}")'
+        return f'{circuit_variable}.connect({source}, {dest}, js_id="{_esc(self.wire_id)}")'
 
 
-def _endpoints(wire):
-    s, e = wire.get("startConnection", {}).get("pos", {}), wire.get("endConnection", {}).get("pos", {})
-    return (_r(s.get("x")), _r(s.get("y"))), (_r(e.get("x")), _r(e.get("y")))
+class Net:
+    """
+    An electrical net: a maximal set of wires which are joined together. Its one driver
+    feeds every sink. This covers both fan-out styles: multiple wires off one output port,
+    and junction branches off a trunk wire.
+    """
+
+    def __init__(self, wires):
+        self.wires = wires
+        self.drivers = {}         # identity -> NetPort
+        self.sinks = {}           # identity -> NetPort
+        self.sink_wire_ids = {}   # identity -> id of the first wire reaching the sink
+
+    def coordinates(self):
+        coordinates = set()
+        for wire in self.wires:
+            coordinates.update(wire.endpoints)
+        return coordinates
+
+    def find_ports(self, index):
+        for wire in self.wires:
+            for position in wire.endpoints:
+                for port in index.ports_at(position):
+                    self.add_port(port, wire)
+
+    def add_port(self, port, wire):
+        if port.direction == "output":
+            self.drivers.setdefault(port.identity, port)
+        else:
+            self.sinks.setdefault(port.identity, port)
+            self.sink_wire_ids.setdefault(port.identity, wire.id)
+
+    def check_single_driver(self, circuit_name):
+        """Two outputs wired together can't both set the wire's value, so the circuit can't
+        be right. For example, a stray wire joining two of a subcircuit's output pins."""
+        distinct = {}
+        for port in self.drivers.values():
+            distinct.setdefault(port.comp.driver_key(port), port)
+        if len(distinct) < 2:
+            return
+        ports = list(distinct.values())
+        first = ports[0]
+        raise CircuitError(
+            component_id=first.comp.id, component_type=first.comp.type,
+            component_label=first.comp.label, error_code=ERROR_NET_MULTIPLE_DRIVERS,
+            port_name=first.name, connected_component_id=ports[1].comp.id,
+            circuit_name=circuit_name, count=len(ports),
+            drivers=", ".join(port.comp.describe_driver(port.name) for port in ports))
+
+    def connections(self):
+        if not self.drivers:
+            return []
+        source = next(iter(self.drivers.values()))
+        return [Connection(source, sink, self.sink_wire_ids[sink.identity])
+                for sink in self.sinks.values()]
 
 
-def _wire_path(wire):
-    """The wire's routed polyline as rounded (x, y) vertices. Falls back to the two
-    endpoints when no explicit ``points`` array is present."""
-    pts = wire.get("points")
-    if pts:
-        return [(_r(p.get("x")), _r(p.get("y"))) for p in pts]
-    return list(_endpoints(wire))
+class NetBuilder:
+    """Groups wires into nets using union-find. Wires are on one net if they share an
+    endpoint coordinate or meet at a junction."""
 
+    def __init__(self, wires, junctions):
+        self.wires = wires
+        self.junctions = junctions
+        self.parent = list(range(len(wires)))
 
-def _wire_covers(wire, pt):
-    """True when ``pt`` lies on the wire — at a vertex or anywhere along a segment.
-    Used to find the trunk a junction taps by geometry rather than a stored index."""
-    px, py = pt
-    path = _wire_path(wire)
-    for (ax, ay), (bx, by) in zip(path, path[1:]):
-        # Collinear (zero cross product) and within the segment's bounding box.
-        if abs((bx - ax) * (py - ay) - (by - ay) * (px - ax)) < 1e-6 and (
-            min(ax, bx) - 1e-6 <= px <= max(ax, bx) + 1e-6
-            and min(ay, by) - 1e-6 <= py <= max(ay, by) + 1e-6
-        ):
-            return True
-    return False
-
-
-def _group_nets(wires, junctions):
-    """Union-find wires into electrical nets — joined by a shared endpoint coordinate or by
-    a junction — and return a list of nets, each a list of wire indices."""
-    from collections import defaultdict
-
-    n = len(wires)
-    parent = list(range(n))
-
-    def find(i):
+    def find(self, i):
         root = i
-        while parent[root] != root:
-            root = parent[root]
-        while parent[i] != root:
-            parent[i], i = root, parent[i]
+        while self.parent[root] != root:
+            root = self.parent[root]
+        while self.parent[i] != root:
+            next_i = self.parent[i]
+            self.parent[i] = root
+            i = next_i
         return root
 
-    def union(a, b):
-        parent[find(a)] = find(b)
+    def union(self, a, b):
+        self.parent[self.find(a)] = self.find(b)
 
-    coord_wires = defaultdict(list)
-    for i, wire in enumerate(wires):
-        for key in _endpoints(wire):
-            coord_wires[key].append(i)
-    for group in coord_wires.values():
-        for j in group[1:]:
-            union(group[0], j)
+    def join_shared_endpoints(self):
+        wires_at = {}
+        for i, wire in enumerate(self.wires):
+            for position in wire.endpoints:
+                wires_at.setdefault(position, []).append(i)
+        for group in wires_at.values():
+            for other in group[1:]:
+                self.union(group[0], other)
 
-    # A junction is a T-tap: a branch wire meets a trunk wire mid-run at ``pos``,
-    # joining them into one net. Resolve the trunk (and branch) by GEOMETRY — every
-    # wire whose routed path passes through ``pos`` — rather than the serialized
-    # positional ``sourceWireIndex``. That index is fragile: after edits/reordering it
-    # can point at an unrelated wire and weld two independent nets together (e.g. input
-    # A's fan-out net into input B's, silently dropping B as a driver). ``connectedWireId``
-    # is a stable id, so include it too in case a branch endpoint rounds off the path.
-    id_to_i = {wire.get("id"): i for i, wire in enumerate(wires)}
-    for jn in junctions or []:
-        pos = jn.get("pos") or {}
-        key = (_r(pos.get("x")), _r(pos.get("y")))
-        touching = [i for i, wire in enumerate(wires) if _wire_covers(wire, key)]
-        ci = id_to_i.get(jn.get("connectedWireId"))
-        if ci is not None and ci not in touching:
-            touching.append(ci)
-        for k in touching[1:]:
-            union(touching[0], k)
+    def join_junctions(self):
+        """Find a junction's wires by geometry: every wire whose path passes through it. Don't
+        use the serialized sourceWireIndex. After edits it can point at an unrelated wire and
+        weld two independent nets together, silently dropping a driver. connectedWireId is a
+        stable id, so include it in case a branch endpoint rounds off the path."""
+        index_of = {wire.id: i for i, wire in enumerate(self.wires)}
+        for junction in self.junctions:
+            touching = [i for i, wire in enumerate(self.wires) if wire.covers(junction.position)]
+            connected = index_of.get(junction.connected_wire_id)
+            if connected is not None and connected not in touching:
+                touching.append(connected)
+            for other in touching[1:]:
+                self.union(touching[0], other)
 
-    nets = defaultdict(list)
-    for i in range(n):
-        nets[find(i)].append(i)
-    return list(nets.values())
-
-
-def _assign_tunnel_directions(components, wires, junctions):
-    """Infer each wired tunnel's direction from what it's wired to, ignoring the stored prop.
-
-    A tunnel whose local net contains a real driver (a non-tunnel output port) is a
-    publisher: it reads that driven value and pushes it onto the named net, so its own port
-    is an input. Otherwise the tunnel is a subscriber — it sources the net's value onto a
-    local wire, so its port is an output. An unwired tunnel is in no net and stays None.
-    """
-    from collections import defaultdict
-
-    comps_at = defaultdict(list)  # coord -> [(component, stored port direction)]
-    for comp in components:
-        for port in comp.ports:
-            comps_at[comp.port_position(port)].append((comp, port.direction))
-
-    for net in _group_nets(wires, junctions):
-        coords = {key for i in net for key in _endpoints(wires[i])}
-        has_driver = False
-        for key in coords:
-            for comp, direction in comps_at.get(key, []):
-                if direction == "output" and not comp.is_tunnel():
-                    has_driver = True
-        for key in coords:
-            for comp, _direction in comps_at.get(key, []):
-                if comp.is_tunnel():
-                    if has_driver:
-                        comp.tunnel_direction = "input"
-                    else:
-                        comp.tunnel_direction = "output"
+    def build(self):
+        self.join_shared_endpoints()
+        self.join_junctions()
+        groups = {}
+        for i, wire in enumerate(self.wires):
+            groups.setdefault(self.find(i), []).append(wire)
+        return [Net(wires) for wires in groups.values()]
 
 
-def _validate_tunnel_nets(components):
-    """Raise a CircuitError for a tunnel net that cannot work: no driver (every same-label
-    tunnel is a subscriber, so they would read nothing) or more than one driver (two
-    publishers contend). Only labelled, wired tunnels form a net."""
-    from collections import defaultdict
+class TunnelNet:
+    """Same-label tunnels, which must have exactly one publisher to work"""
 
-    publishers_of = defaultdict(list)
-    subscribers_of = defaultdict(list)
-    labels = []
-    for comp in components:
-        if not comp.is_tunnel() or comp.tunnel_direction is None or not comp.label:
-            continue
-        if comp.label not in labels:
-            labels.append(comp.label)
-        if comp.tunnel_direction == "input":
-            publishers_of[comp.label].append(comp)
+    def __init__(self, label):
+        self.label = label
+        self.publishers = []
+        self.subscribers = []
+
+    def add(self, tunnel):
+        if tunnel.tunnel_direction == "input":
+            self.publishers.append(tunnel)
         else:
-            subscribers_of[comp.label].append(comp)
+            self.subscribers.append(tunnel)
 
-    for label in labels:
-        publishers = publishers_of[label]
-        subscribers = subscribers_of[label]
-        if len(publishers) >= 2:
-            raise CircuitError(
-                component_id=publishers[1].id, component_type="tunnel",
-                component_label=label, error_code=ERROR_TUNNEL_MULTIPLE_DRIVERS, label=label)
-        if not publishers and subscribers:
-            raise CircuitError(
-                component_id=subscribers[0].id, component_type="tunnel",
-                component_label=label, error_code=ERROR_TUNNEL_NO_DRIVER, label=label)
+    def check(self):
+        if len(self.publishers) >= 2:
+            self.raise_error(self.publishers[1], ERROR_TUNNEL_MULTIPLE_DRIVERS)
+        if not self.publishers and self.subscribers:
+            self.raise_error(self.subscribers[0], ERROR_TUNNEL_NO_DRIVER)
 
-
-def _driver_key(var, port, comp):
-    """Same-label subscriber tunnels on one net carry the same value, so they share a key
-    and count as one driver. Any other output port is its own driver."""
-    if comp.is_tunnel():
-        return ("tunnel", comp.label)
-    return (var, port)
+    def raise_error(self, tunnel, error_code):
+        raise CircuitError(
+            component_id=tunnel.id, component_type="tunnel", component_label=self.label,
+            error_code=error_code, label=self.label)
 
 
-def _describe_driver(comp, port):
-    """A driver's name for an error message. A subcircuit's positional port is shown by its
-    inner label (as resolved in the index)."""
-    name = comp.label or comp.type
-    output_count = sum(1 for p in comp.ports if p.direction == "output")
-    if output_count > 1:
-        return f"{name}.{port}"
-    return name
+class TunnelNets:
+    """Infers each wired tunnel's direction from its net, then checks the named nets"""
+
+    def __init__(self, components, nets):
+        self.components = components
+        self.nets = nets
+
+    def assign_directions(self):
+        ports_at = {}  # position -> [(component, stored port direction)]
+        for comp in self.components:
+            for port in comp.ports:
+                ports_at.setdefault(comp.port_position(port), []).append((comp, port.direction))
+
+        for net in self.nets:
+            on_net = []
+            for position in net.coordinates():
+                on_net += ports_at.get(position, [])
+            has_driver = any(comp.drives_net(direction) for comp, direction in on_net)
+            for comp, _direction in on_net:
+                comp.wired_to_net(has_driver)
+
+    def check(self):
+        tunnel_nets = {}
+        for comp in self.components:
+            comp.join_tunnel_net(tunnel_nets)
+        for tunnel_net in tunnel_nets.values():
+            tunnel_net.check()
 
 
-def _check_single_driver(outs, comp_of_var, circuit_name):
-    """Raise a CircuitError if a net has more than one driver (output port). Two outputs
-    wired together can't both set the wire's value, so the circuit can't be right — e.g. a
-    stray wire joining two of a subcircuit's output pins."""
-    drivers = []
-    seen = set()
-    for var, port in outs:
-        comp = comp_of_var[var]
-        key = _driver_key(var, port, comp)
-        if key not in seen:
-            seen.add(key)
-            drivers.append((comp, port))
-    if len(drivers) < 2:
-        return
-
-    first, first_port = drivers[0]
-    second = drivers[1][0]
-    raise CircuitError(
-        component_id=first.id, component_type=first.type, component_label=first.label,
-        error_code=ERROR_NET_MULTIPLE_DRIVERS, port_name=first_port,
-        connected_component_id=second.id, circuit_name=circuit_name,
-        count=len(drivers), drivers=", ".join(_describe_driver(c, p) for c, p in drivers))
-
-
-def _resolve_connections(wires, junctions, index, comp_of_var=None, circuit_name=None):
-    """Group wires into electrical nets and return (src, dst, wire_id) connections.
-
-    A net is a maximal set of wires joined either by a shared endpoint coordinate or by
-    a junction (a branch wire meeting another wire mid-run). Each net's ports are found
-    by matching every endpoint against the port index; the net's one output drives each
-    of its inputs. This subsumes both fan-out styles: multiple wires off one output port,
-    and junction branches off a trunk wire. With ``comp_of_var`` (var -> component dict),
-    a net with more than one driver raises a CircuitError rather than silently using the
-    first.
-    """
-    conns = []
-    for net in _group_nets(wires, junctions):
-        outs: list = []
-        ins: list = []
-        input_wire: dict = {}
-        for i in net:
-            for key in _endpoints(wires[i]):
-                for (var, name, direction) in index.get(key, []):
-                    port = (var, name)
-                    if direction == "output":
-                        if port not in outs:
-                            outs.append(port)
-                    else:
-                        if port not in ins:
-                            ins.append(port)
-                        input_wire.setdefault(port, wires[i].get("id", ""))
-        if comp_of_var is not None and len(outs) > 1:
-            _check_single_driver(outs, comp_of_var, circuit_name)
-        if outs and ins:
-            src = outs[0]
-            for dst in ins:
-                conns.append((src, dst, input_wire.get(dst, "")))
+def _resolve_connections(nets, index, circuit_name):
+    connections = []
+    for net in nets:
+        net.find_ports(index)
+        net.check_single_driver(circuit_name)
+        connections += net.connections()
     # Stable output order regardless of union-find internals.
-    conns.sort(key=lambda c: (c[0], c[1]))
-    return conns
+    connections.sort(key=Connection.sort_key)
+    return connections
 
 
 def _validate_interface_connected(components, var_of, conns, circuit_name):
@@ -775,8 +854,8 @@ def _validate_interface_connected(components, var_of, conns, circuit_name):
     port then fails deep in the engine with a bare ``KeyError``. Catch it here, at generation
     time, with a clear message naming the circuit and the port. (Only subcircuits: a
     top-level open input/output is a non-fatal 'unused' warning, handled elsewhere.)"""
-    driven = {dvar for (_s, (dvar, _dn), _js) in conns}    # ports something drives (a dst)
-    driving = {svar for ((svar, _sn), _d, _js) in conns}   # ports that drive (a src)
+    driven = {connection.dest.variable for connection in conns}
+    driving = {connection.source.variable for connection in conns}
     for comp in components:
         if comp.type not in ("input", "output"):
             continue
@@ -799,10 +878,11 @@ def _emit_body(components, wires, junctions, circ_var, subdefs, templates, lines
                circuit_name=None):
     """Emit node declarations and connect() calls for one circuit (top level or a
     subcircuit body) into ``circ_var``."""
-    # A tunnel's direction is derived from its wiring (not the stored prop), and same-label
-    # tunnels must form a valid net (exactly one driver). Resolve and check both up front.
-    _assign_tunnel_directions(components, wires, junctions)
-    _validate_tunnel_nets(components)
+    nets = NetBuilder([GgcWire(wire) for wire in wires],
+                      [GgcJunction(junction) for junction in junctions]).build()
+    tunnel_nets = TunnelNets(components, nets)
+    tunnel_nets.assign_directions()
+    tunnel_nets.check()
 
     var_of = {}
     value_inits = []
@@ -826,15 +906,11 @@ def _emit_body(components, wires, junctions, circ_var, subdefs, templates, lines
     lines.extend(value_inits)
 
     index = _port_index(components, var_of, subdefs)
-    comp_of_var = {var_of[c.id]: c for c in components if c.id in var_of}
-    conns = _resolve_connections(wires, junctions, index, comp_of_var, circuit_name)
+    conns = _resolve_connections(nets, index, circuit_name)
     if not is_top:
         _validate_interface_connected(components, var_of, conns, circuit_name)
-    for (svar, sname), (dvar, dname), js in conns:
-        lines.append(
-            f'{circ_var}.connect({svar}.output("{sname}"), '
-            f'{dvar}.input("{dname}"), js_id="{_esc(js)}")'
-        )
+    for connection in conns:
+        lines.append(connection.statement(circ_var))
 
 
 def generate(ggc, mode="run"):
