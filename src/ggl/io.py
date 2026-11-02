@@ -202,7 +202,7 @@ class Probe(IONode):
     - Circuit.connect() only appends a node to circuit.outputs when its kind is
       exactly Output.kind, so a Probe never becomes one of the circuit's outputs.
     - A subcircuit's ports come from its inner Input/Output components (see
-      ggl.component.CircuitNode and ggl.view._validate_interface_connected, both of
+      ggl.component.CircuitNode and ggl.view.CircuitEmitter, both of
       which key off type/kind "output" specifically) -- a Probe embedded in a
       subcircuit stays purely internal and is never exposed to the parent circuit.
 
