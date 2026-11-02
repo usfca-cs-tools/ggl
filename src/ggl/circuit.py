@@ -24,7 +24,7 @@ def _tag_circuit_context(err, node, fallback_name):
     already carries a circuit or there's no context to add, so callers can test
     identity to decide whether to re-raise a new error.
     """
-    ctx_name = getattr(node, 'circuit_name', None) or fallback_name
+    ctx_name = node.circuit_name or fallback_name
     if err.circuit_name or not ctx_name:
         return err
     return CircuitError(
@@ -55,7 +55,7 @@ class Circuit:
         # deterministic. A set here makes object iteration order vary per run,
         # which non-deterministically changes how feedback (latches) settle.
         self.all_nodes = []
-        self.clock: Clock = None
+        self.clock: Clock | None = None
         self.running = False  # set True by run()/run_async()
         # A user-requested abort. Unlike `running` (which run()/cycle() flip back
         # on each call), this stays set until a fresh Circuit is built, so it can
@@ -66,6 +66,8 @@ class Circuit:
         self.auto_propagate = True
         # Re-entrancy guard so propagation can't trigger nested step()s.
         self._in_step = False
+        # Label -> [output tunnels], built on first use by tunnel_sinks().
+        self._tunnel_sinks = None
 
         # Set up logging for this circuit and all its components
         if js_logging is not None:
@@ -232,20 +234,27 @@ class Circuit:
             "total_s": elapsed,
             "per_iter_ms": elapsed / iterations * 1e3,
             "avg_passes": passes / iterations,
-            "deep_nodes": self._deep_node_count(),
+            "deep_nodes": self.deep_node_count(),
         }
 
-    def _deep_node_count(self):
+    def deep_node_count(self):
         """Total nodes including those inside embedded CircuitNode subcircuits.
         all_nodes is only the top level; a gate-level counter hides most of its
         gates one or more levels down."""
         total = 0
-        for n in self.all_nodes:
-            total += 1
-            sub = getattr(n, "circuit", None)
-            if hasattr(n, "_input_mapping") and sub is not None:
-                total += sub._deep_node_count()
+        for node in self.all_nodes:
+            total += node.deep_node_count()
         return total
+
+    def tunnel_sinks(self, label):
+        """The output tunnels named label in this circuit. The tunnel graph is fixed once
+        construction and connect() finish, so the map is built once, on first use."""
+        if self._tunnel_sinks is None:
+            self._tunnel_sinks = {}
+            for node in self.all_nodes:
+                if node.is_output_tunnel() and node.label:
+                    self._tunnel_sinks.setdefault(node.label, []).append(node)
+        return self._tunnel_sinks.get(label, [])
 
     async def run_async(self):
         """
@@ -350,7 +359,7 @@ class Circuit:
             # Clock is driven by the circuit and a Constant never changes, so neither reads
             # it and neither gets one.
             if srcnode.kind == Input.kind:
-                srcnode.circuit = self
+                srcnode.owner = self
         if destnode.kind == Output.kind and destnode not in self.outputs:
             self.outputs.append(destnode)
 
@@ -359,10 +368,9 @@ class Circuit:
             if node not in self.all_nodes:
                 self.all_nodes.append(node)
             # A tunnel resolves its net within its owning circuit (see Tunnel.propagate), so
-            # it needs a back-reference to this circuit. Scope this to tunnels: other nodes
-            # don't need it, and CircuitNode.circuit means something else entirely.
+            # it needs a back-reference to this circuit.
             if node.kind == Tunnel.kind:
-                node.circuit = self
+                node.owner = self
 
         # Keep the Clock node for running the circuit
         if srcnode.kind == Clock.kind:

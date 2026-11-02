@@ -59,7 +59,7 @@ def run_benchmarks():
         c = build()
         c.preflight()
         c.settle()  # prime: reach a stable state before timing
-        nodes = c._deep_node_count()
+        nodes = c.deep_node_count()
         b = c.benchmark(_iterations_for(nodes))
         results.append({
             "label": label,

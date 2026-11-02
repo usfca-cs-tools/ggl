@@ -13,6 +13,10 @@ import pytest
 
 from ggl import view
 
+
+def _expr(data):
+    return view.parse_component(data).expression()
+
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "ggc")
 
 
@@ -180,7 +184,7 @@ def test_run_tail_selection():
 
 
 def test_test_emitter_builds_a_valid_io_test():
-    expr, _ = view._component_expr({"id": "t", "type": "test", "props": {
+    expr = _expr({"id": "t", "type": "test", "props": {
         "label": "c", "table": {"inputNames": ["A", "B"], "outputNames": ["Y"], "rows": [[1, 1, 1]]},
         "stop_enabled": True, "stop_output_name": "COUNT", "stop_output_value": 5,
         "reset_enabled": True, "reset_input_name": "CLR"}})
@@ -396,11 +400,13 @@ def test_junction_trunk_resolved_by_geometry_not_stale_index():
     # at wB (index 2), a wire in the other net. Geometry (pos on wA) must win.
     junctions = [{"pos": {"x": 5, "y": 0}, "connectedWireId": "wAb", "sourceWireIndex": 2}]
     net_of = {}
-    for k, net in enumerate(view._group_nets(wires, junctions)):
-        for i in net:
-            net_of[i] = k
-    assert net_of[0] == net_of[1]  # branch joins its real trunk (A), via geometry
-    assert net_of[2] != net_of[0]  # net B stays independent despite the stale index
+    parsed_wires = [view.GgcWire(wire) for wire in wires]
+    parsed_junctions = [view.GgcJunction(junction) for junction in junctions]
+    for k, net in enumerate(view.NetBuilder(parsed_wires, parsed_junctions).build()):
+        for wire in net.wires:
+            net_of[wire.id] = k
+    assert net_of["wA"] == net_of["wAb"]  # branch joins its real trunk (A), via geometry
+    assert net_of["wB"] != net_of["wA"]  # net B stays independent despite the stale index
 
 
 def test_counter_no_subcircuits_counts_when_clocked():
@@ -457,7 +463,7 @@ def test_counter_no_subcircuits_counts_when_clocked():
 def test_leaf_emitter_constructs_a_valid_ggl_node(comp, expected_kind):
     # The emitted construction line must actually build the right ggl node — this is
     # what would fail on a bad class name (arithmetic.Divide) or wrong kwargs (Shift).
-    expr, _ = view._component_expr({"id": "x", **comp})
+    expr = _expr({"id": "x", **comp})
     from ggl import arithmetic, circuit, io, logic, memory, plexers, wires
     ns = {"arithmetic": arithmetic, "circuit": circuit, "io": io, "logic": logic,
           "memory": memory, "plexers": plexers, "wires": wires}
@@ -466,13 +472,13 @@ def test_leaf_emitter_constructs_a_valid_ggl_node(comp, expected_kind):
 
 
 def test_shift_maps_packed_mode_to_direction_and_mode():
-    expr, _ = view._component_expr(
+    expr = _expr(
         {"id": "s", "type": "shift", "props": {"label": "s", "bits": 4, "mode": "arithmetic_right"}})
     assert 'direction="right"' in expr and 'mode="arithmetic"' in expr
 
 
 def test_rom_pads_and_clamps_data_to_address_space():
-    expr, _ = view._component_expr(
+    expr = _expr(
         {"id": "r", "type": "rom", "props": {"addressBits": 2, "dataBits": 2, "data": [1, 9, 3]}})
     # 2 address bits -> 4 cells; values clamped to 2-bit max (3); missing cells zero.
     assert "data=[1, 3, 3, 0]" in expr
@@ -899,19 +905,38 @@ def _chips_rom(words, address_bits=3):
 def test_chips_rom_with_no_program_raises():
     from ggl.errors import CircuitError, ERROR_CHIPSROM_NO_PROGRAM
     with pytest.raises(CircuitError) as ei:
-        view._component_expr(_chips_rom([]))
+        _expr(_chips_rom([]))
     assert ei.value.error_code == ERROR_CHIPSROM_NO_PROGRAM
     assert ei.value.component_id == "c1"
 
 def test_chips_rom_program_larger_than_address_space_raises():
     from ggl.errors import CircuitError, ERROR_CHIPSROM_OVERFLOW
     with pytest.raises(CircuitError) as ei:
-        view._component_expr(_chips_rom([0x13] * 9, address_bits=3))
+        _expr(_chips_rom([0x13] * 9, address_bits=3))
     assert ei.value.error_code == ERROR_CHIPSROM_OVERFLOW
     assert ei.value.additional_fields["words"] == 9
     assert ei.value.additional_fields["capacity"] == 8
 
 
-def test_null_bits_means_one_bit():
-    expr, _ = view._component_expr({"id": "i", "type": "input", "props": {"label": "a", "bits": None}})
-    assert "bits=1" in expr
+def _test_component(**props):
+    return view.parse_component({"id": "t", "type": "test", "props": {
+        "label": "t", "stop_enabled": True, **props}})
+
+
+def test_a_cleared_number_field_means_its_default():
+    # The inspector stores a number field the user cleared as null
+    component = _test_component(max_cycles=None, stop_output_value=None)
+    assert component.max_cycles == 1000
+    assert component.stop_output_value == 0
+    assert view.parse_component({"id": "i", "type": "input", "props": {"value": None}}).stored_value == 0
+
+
+def test_null_in_a_structural_field_fails_instead_of_being_hidden():
+    with pytest.raises(TypeError):
+        view.parse_component({"id": "a", "type": "and-gate", "ports": None})
+
+
+def test_a_cleared_bits_field_means_one_bit():
+    component = view.parse_component({"id": "i", "type": "input", "props": {"label": "a", "bits": None}})
+    assert component.bits == 1
+    assert "bits=1" in component.expression()

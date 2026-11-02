@@ -14,14 +14,14 @@ class CircuitNode(Node):
     Each CircuitNode maintains its own state.
     """
 
+    # The embedded circuit must not be walked by a deepcopy that reaches this node through
+    # an edge; see Node.__deepcopy__
+    members_not_copied = ('owner', 'subcircuit')
+
     def __init__(self, template, instance_id):
         """
-        Create a CircuitNode that wraps a cloned circuit instance.        
+        Create a CircuitNode that wraps a cloned circuit instance.
         """
-        # Clone the circuit to ensure independent state
-        self.circuit = self._clone_circuit(template, instance_id)
-        self._instance_id = instance_id
-
         # Extract input and output names from the ORIGINAL template (not cloned circuit)
         # This ensures the external interface uses the original names. A subcircuit's
         # interface inputs are its Input nodes only — a Constant or Clock is a self-driven
@@ -50,11 +50,18 @@ class CircuitNode(Node):
             label=label
         )
 
+        # Clone the circuit to ensure independent state
+        self.subcircuit = self._clone_circuit(template, instance_id)
+        self._instance_id = instance_id
+
         # Create mapping from original names to cloned node names for internal use
         self._input_mapping = {
             i.label: f"{i.label}_{instance_id}" for i in interface_inputs}
         self._output_mapping = {
             o.label: f"{o.label}_{instance_id}" for o in template.outputs}
+
+    def deep_node_count(self):
+        return 1 + self.subcircuit.deep_node_count()
 
     def _clone_circuit(self, template, instance_id):
         """
@@ -85,14 +92,14 @@ class CircuitNode(Node):
             # Update circuit's input/output lists
             if template_node in template.inputs:
                 cloned_circuit.inputs.append(cloned_node)
-                cloned_node.circuit = cloned_circuit
+                cloned_node.owner = cloned_circuit
             if template_node in template.outputs:
                 cloned_circuit.outputs.append(cloned_node)
             # A tunnel resolves its net within its owning circuit, so point the clone at THIS
             # cloned circuit (the template pointed at the template circuit). Without this a
             # cloned subcircuit's internal tunnels never rejoin and silently carry nothing.
             if cloned_node.kind == 'Tunnel':
-                cloned_node.circuit = cloned_circuit
+                cloned_node.owner = cloned_circuit
 
         # Clone all connections and build edge mapping for nested CircuitNode fixup
         # Maps template edge to cloned edge
@@ -138,7 +145,7 @@ class CircuitNode(Node):
                 continue
 
             # Fix up ChildInputs inside this nested CircuitNode
-            for child_input in cloned_node.circuit.inputs:
+            for child_input in cloned_node.subcircuit.inputs:
                 if hasattr(child_input, 'parent_edge') and child_input.parent_edge is not None:
                     # Find the port name by matching the ChildInput's label
                     port_name = None
@@ -154,7 +161,7 @@ class CircuitNode(Node):
                             child_input.parent_edge = new_edge
 
             # Also fix up ChildOutputs - copy all edges from CircuitNode's outputs
-            for child_output in cloned_node.circuit.outputs:
+            for child_output in cloned_node.subcircuit.outputs:
                 if child_output.kind == 'ChildOutput':
                     port_name = None
                     for orig_name, cloned_name in cloned_node._output_mapping.items():
@@ -174,13 +181,13 @@ class CircuitNode(Node):
         """
         Return the embedded circuit's input nodes as work items.
 
-        The ChildInput nodes inside self.circuit will read values from their
+        The ChildInput nodes inside self.subcircuit will read values from their
         parent edges and propagate them through the circuit. The ChildOutput
         nodes will then propagate results back to the parent circuit.
 
         This keeps all propagation in a single work queue.
         """
-        return list(self.circuit.inputs)
+        return list(self.subcircuit.inputs)
 
     def input(self, name):
         """Get a connector for the named input"""
@@ -201,7 +208,7 @@ class CircuitNode(Node):
         # Find the cloned input node by its label
         cloned_label = self._input_mapping[port_name]
         old_input = None
-        for node in self.circuit.inputs:
+        for node in self.subcircuit.inputs:
             if node.label == cloned_label:
                 old_input = node
                 break
@@ -224,7 +231,7 @@ class CircuitNode(Node):
         )
         # Carry the subcircuit tag so a width-mismatch at this boundary names the subcircuit
         # the port lives in, not the flattened top circuit.
-        child_input.circuit_name = getattr(old_input, 'circuit_name', None)
+        child_input.circuit_name = old_input.circuit_name
 
         # Copy output edges from old input to new ChildInput
         for output_name, edges in old_input.outputs.points.items():
@@ -234,11 +241,11 @@ class CircuitNode(Node):
                 edge.srcpoint.node = child_input
 
         # Replace in circuit's input list and all_nodes
-        self.circuit.inputs.remove(old_input)
-        self.circuit.inputs.append(child_input)
-        if old_input in self.circuit.all_nodes:
-            self.circuit.all_nodes.remove(old_input)
-        self.circuit.all_nodes.append(child_input)
+        self.subcircuit.inputs.remove(old_input)
+        self.subcircuit.inputs.append(child_input)
+        if old_input in self.subcircuit.all_nodes:
+            self.subcircuit.all_nodes.remove(old_input)
+        self.subcircuit.all_nodes.append(child_input)
 
     def _wire_child_output(self, port_name, parent_edge):
         """
@@ -251,7 +258,7 @@ class CircuitNode(Node):
         # Find the output node by its label
         cloned_label = self._output_mapping[port_name]
         existing_output = None
-        for node in self.circuit.outputs:
+        for node in self.subcircuit.outputs:
             if node.label == cloned_label:
                 existing_output = node
                 break
@@ -290,11 +297,11 @@ class CircuitNode(Node):
                         dest_point.node = child_output
 
         # Replace in circuit's output list and all_nodes
-        self.circuit.outputs.remove(existing_output)
-        self.circuit.outputs.append(child_output)
-        if existing_output in self.circuit.all_nodes:
-            self.circuit.all_nodes.remove(existing_output)
-        self.circuit.all_nodes.append(child_output)
+        self.subcircuit.outputs.remove(existing_output)
+        self.subcircuit.outputs.append(child_output)
+        if existing_output in self.subcircuit.all_nodes:
+            self.subcircuit.all_nodes.remove(existing_output)
+        self.subcircuit.all_nodes.append(child_output)
 
     def clone(self, instance_id):
         """
@@ -321,7 +328,7 @@ class CircuitNode(Node):
                       label=new_label)
 
         # Clone the internal circuit
-        cloned_node.circuit = self._clone_circuit(self.circuit, instance_id)
+        cloned_node.subcircuit = self._clone_circuit(self.subcircuit, instance_id)
         cloned_node._instance_id = instance_id
 
         # Update the input/output mappings to use the new instance_id

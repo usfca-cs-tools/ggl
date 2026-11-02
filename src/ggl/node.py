@@ -1,8 +1,14 @@
+from __future__ import annotations
+
 import copy
-import logging
+from typing import TYPE_CHECKING, Any
 
 from .ggl_logging import new_logger
 from .errors import CircuitError
+
+if TYPE_CHECKING:
+    from .circuit import Circuit
+    from .edge import Edge
 
 logger = new_logger(__name__)
 
@@ -32,7 +38,7 @@ class NodeInputs:
     """
 
     def __init__(self, names, node):
-        self.points = {name: None for name in names}
+        self.points: dict[str, Edge | None] = {name: None for name in names}
         self.node = node
 
     def get_edge(self, name):
@@ -55,7 +61,7 @@ class NodeInputs:
                 component_label=node.label,
                 error_code="inputShortCircuit",
                 port_name=name,
-                connected_component_id=getattr(driver, 'js_id', None),
+                connected_component_id=driver.js_id,
             )
         self.points[name] = edge
 
@@ -64,7 +70,9 @@ class NodeInputs:
 
     def read_value(self, name, bits):
         # Read the value from the edge connected to the named inpoint
-        edge = self.points[name]
+        # An unconnected input has no edge. safe_read_input() catches the AttributeError
+        # from that, which keeps this hot path free of a None check.
+        edge: Any = self.points[name]
         # edge.bits is None means unvisited, so don't raise for that
         if edge.bits is not None and bits != edge.bits:
             raise BitWidthMismatch(bits, edge.bits)
@@ -88,7 +96,7 @@ class NodeOutputs:
     """
 
     def __init__(self, names, node):
-        self.points = {name: [] for name in names}
+        self.points: dict[str, list[Edge]] = {name: [] for name in names}
         self.node = node
 
     def append_edge(self, name, obj):
@@ -119,15 +127,32 @@ class Node:
     in the circuit
     """
 
+    # Members that refer to a whole Circuit, which __deepcopy__ must not walk
+    members_not_copied: tuple[str, ...] = ('owner',)
+
     def __init__(self, kind, js_id='', innames=[], outnames=[], label=''):
         self.kind = kind    # Hard-coded, e.g. 'And Gate'
         self.js_id = js_id  # Optionally provided be the frontend
         self.label = label  # User-provided, e.g. 'is b-type'
         self.inputs = NodeInputs(innames, self)
         self.outputs = NodeOutputs(outnames, self)
+        # The Circuit this node belongs to, for nodes that need to reach it: an Input
+        # re-propagates when assigned, and a Tunnel joins same-label tunnels. Set by
+        # Circuit.connect(), or by CircuitNode when cloning a subcircuit.
+        self.owner: Circuit | None = None
+        # The subcircuit this node was cloned into, so an error can name it. None at top level.
+        self.circuit_name: str | None = None
 
     def __str__(self):
         return f'{self.kind} {self.label}'
+
+    def deep_node_count(self):
+        """How many nodes this one amounts to, counting any embedded subcircuit."""
+        return 1
+
+    def is_output_tunnel(self):
+        """True for a tunnel which reads its value from a same-label tunnel."""
+        return False
 
     def get_input_edge(self, name):
         return self.inputs.get_edge(name)
@@ -210,7 +235,7 @@ class Node:
     def __deepcopy__(self, memo):
         """Deep-copy this node's OWN state only, never its edges.
 
-        An edge references the nodes it joins and a node's `.circuit` points back at the
+        An edge references the nodes it joins and a node's `.owner` points back at the
         whole Circuit, so a naive deepcopy walks the entire connected graph — O(graph) per
         node and deep enough on large nested circuits to overflow the recursion limit.
         Instead we copy the intrinsic attributes (bits, ROM/register contents, js_id, …)
@@ -226,8 +251,8 @@ class Node:
                 new.inputs = NodeInputs(list(value.points.keys()), new)
             elif key == "outputs":
                 new.outputs = NodeOutputs(list(value.points.keys()), new)
-            elif key == "circuit":
-                new.circuit = None  # back-reference; the caller reassigns it
+            elif key in self.members_not_copied:
+                new.__dict__[key] = None  # the caller reassigns it
             else:
                 new.__dict__[key] = copy.deepcopy(value, memo)
         return new
@@ -236,7 +261,7 @@ class Node:
         """Create a disconnected copy of this node with an instance-suffixed label.
         Connections are cleared by __deepcopy__; the caller rewires the clone."""
         node = copy.deepcopy(self)
-        if getattr(node, "label", None):
+        if node.label:
             node.label = f"{node.label}_{instance_id}"
         return node
 
@@ -303,7 +328,7 @@ def _sugar_getattribute(self, name):
 
 def enable_sugar():
     """Turn on `node.<portname>` attribute sugar (for hand-authored circuits)."""
-    Node.__getattribute__ = _sugar_getattribute
+    Node.__getattribute__ = _sugar_getattribute  # type: ignore[method-assign]
 
 
 def disable_sugar():
